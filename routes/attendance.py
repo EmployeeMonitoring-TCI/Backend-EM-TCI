@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 db_firestore = get_db()
 
 class AttendanceRequest(BaseModel):
+    uid: str
     email: EmailStr
     latitude: float
     longitude: float
@@ -42,14 +43,14 @@ def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: fl
     
     return R * c
 
-def has_already_attended(email: str, attendance_type: str) -> bool:
+def has_already_attended(uid: str, attendance_type: str) -> bool:
     db_firestore = get_db()
     today = datetime.now().date()
     start_of_day = datetime.combine(today, time.min)
     end_of_day = datetime.combine(today, time.max)
 
     docs = db_firestore.collection("attendances") \
-        .where(filter=FieldFilter("email", "==", email.lower().strip())) \
+        .where(filter=FieldFilter("uid", "==", uid)) \
         .get()
 
     for doc in docs:
@@ -105,14 +106,24 @@ def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
 def check_in_attendance(req: CheckInRequest):
     clean_email = req.email.lower().strip()
 
+    db_firestore = get_db()
+    user_ref = db_firestore.collection("users").document(req.uid)
+    user_doc = user_ref.get()
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    user_data = user_doc.to_dict() or {}
+    registered_email = str(user_data.get("email", "")).lower().strip()
+    if registered_email != clean_email:
+        raise HTTPException(status_code=403, detail="Data pengguna tidak sesuai. Silakan buka ulang aplikasi agar email tersinkronisasi.")
+
     # 1. CEK APABILA SUDAH CHECK-IN HARI INI
-    if has_already_attended(clean_email, "CHECK_IN"):
+    if has_already_attended(req.uid, "CHECK_IN"):
         raise HTTPException(
             status_code=400,
             detail="Gagal Absen Masuk: Anda sudah melakukan presensi masuk untuk hari ini."
         )
 
-    db_firestore = get_db()
     now = datetime.now()
     current_time = now.time()
 
@@ -144,16 +155,6 @@ def check_in_attendance(req: CheckInRequest):
         )
 
     # 4. VERIFIKASI USER & WAJAH
-    user_ref = db_firestore.collection("users").document(req.uid)
-    user_doc = user_ref.get()
-    if not user_doc.exists:
-        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
-
-    user_data = user_doc.to_dict() or {}
-    registered_email = str(user_data.get("email", "")).lower().strip()
-    if registered_email != clean_email:
-        raise HTTPException(status_code=403, detail="Data pengguna tidak sesuai.")
-
     known_encoding = user_data.get("face_encoding")
     if not user_data.get("face_registered") or not known_encoding:
         raise HTTPException(status_code=400, detail="Wajah Anda belum terdaftar.")
@@ -206,13 +207,13 @@ def check_out_attendance(req: AttendanceRequest):
     clean_email = req.email.lower().strip()
 
     # 1. CEK DUA KONDISI PRASYARAT
-    if not has_already_attended(clean_email, "CHECK_IN"):
+    if not has_already_attended(req.uid, "CHECK_IN"):
         raise HTTPException(
             status_code=400,
             detail="Gagal Absen Pulang: Anda belum melakukan presensi masuk hari ini."
         )
 
-    if has_already_attended(clean_email, "CHECK_OUT"):
+    if has_already_attended(req.uid, "CHECK_OUT"):
         raise HTTPException(
             status_code=400,
             detail="Gagal Absen Pulang: Anda sudah melakukan presensi pulang hari ini."
@@ -247,11 +248,14 @@ def check_out_attendance(req: AttendanceRequest):
         )
 
     # 4. USER & FACE VERIFICATION
-    user_docs = db_firestore.collection("users").where(filter=FieldFilter("email", "==", clean_email)).limit(1).get()
-    if not user_docs:
+    user_doc = db_firestore.collection("users").document(req.uid).get()
+    if not user_doc.exists:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
 
-    user_data = user_docs[0].to_dict() or {}
+    user_data = user_doc.to_dict() or {}
+    registered_email = str(user_data.get("email", "")).lower().strip()
+    if registered_email != clean_email:
+        raise HTTPException(status_code=403, detail="Data pengguna tidak sesuai. Silakan buka ulang aplikasi agar email tersinkronisasi.")
     known_encoding = user_data.get("face_encoding")
     if not user_data.get("face_registered") or not known_encoding:
         raise HTTPException(status_code=400, detail="Wajah Anda belum terdaftar.")
@@ -261,6 +265,7 @@ def check_out_attendance(req: AttendanceRequest):
 
     # 5. SIMPAN RECORD CHECK_OUT
     attendance_data = {
+        "uid": req.uid,
         "email": clean_email,
         "latitude": req.latitude,
         "longitude": req.longitude,
