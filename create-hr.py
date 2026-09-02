@@ -50,9 +50,9 @@ def create_hr_account(email, password, full_name):
                 "uid": {"stringValue": user_uid},
                 "fullName": {"stringValue": full_name},
                 "email": {"stringValue": clean_email},
-                "role": {"stringValue": "hr"},
+                "role": {"stringValue": "leader"},
                 "status": {"stringValue": "approved"},
-                "departmentId": {"stringValue": "HRD"}
+                "departmentId": {"stringValue": "leader"}
             }
         }
 
@@ -68,4 +68,4 @@ def create_hr_account(email, password, full_name):
         print(f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
-    create_hr_account("hr@test.com", "PasswordHR123!", "Dwi Retno Purnomo")
+    create_hr_account("budi@gmail.com", "Uid35k32!", "Budi Santoso")

@@ -1,12 +1,17 @@
 from email.mime.text import MIMEText
+import os
 import random
 import smtplib
 import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from firebase_admin import auth
+from dotenv import load_dotenv
 
-from credential import APP_PASSWORD_KEY
+load_dotenv()
+
+SENDER_EMAIL = os.getenv("SMTP_SENDER_EMAIL", "")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -42,8 +47,14 @@ def send_otp(req: SendOTPRequest):
         "expires_at": expires_at
     }
 
-    sender_email = "fiismatunnissa@gmail.com"
-    sender_app_password = APP_PASSWORD_KEY  # Ganti App Password Anda
+    sender_email = SENDER_EMAIL
+    sender_app_password = GMAIL_APP_PASSWORD
+
+    if not sender_email or not sender_app_password:
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP belum dikonfigurasi. Set SMTP_SENDER_EMAIL dan GMAIL_APP_PASSWORD di .env",
+        )
 
     try:
         msg = MIMEText(f"Kode OTP pemulihan kata sandi PT Tri Cipta Integra Anda adalah: {otp_code}\n\nKode ini berlaku selama 5 menit.")

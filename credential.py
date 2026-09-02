@@ -1,1 +1,0 @@
-APP_PASSWORD_KEY = "hzjf twfx oqpg knzu"
