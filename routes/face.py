@@ -1,5 +1,9 @@
 import base64
+import datetime
 import io
+import os
+import random
+
 import firebase_admin
 import numpy as np
 import face_recognition
@@ -9,8 +13,9 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 
 from firebase_admin import firestore, auth as firebase_auth
-from google.cloud import firestore as google_firestore
+
 from google.cloud.firestore_v1.base_query import FieldFilter
+from services.whatsapp import send_whatsapp_otp
 
 router = APIRouter(prefix="/api/face", tags=["Face Management"])
 
@@ -18,6 +23,8 @@ def get_db():
     app = firebase_admin.get_app()
     return firestore.client(app=app)
 
+
+# --- Pydantic Schemas ---
 class RegisterFaceRequest(BaseModel):
     email: EmailStr
     photoBase64: str
@@ -28,10 +35,13 @@ class RegistrationRequest(BaseModel):
     email: EmailStr
     password: str
     countryCode: str = "+62"  # Contoh: +62, +1, +65
-    phone: Optional[str] = None
+    phone: str               # Nomor WhatsApp wajib untuk OTP
     departmentId: str
     photoBase64: str
+    role: Optional[str] = "employee"
 
+
+# --- Utility Functions ---
 def convert_and_resize_base64(base64_str: str) -> Image.Image:
     if not base64_str:
         raise HTTPException(status_code=400, detail="Data foto tidak ditemukan.")
@@ -73,9 +83,117 @@ def detect_and_encode_face(pil_image: Image.Image):
 
     return encodings[0].tolist(), None
 
+
+
+def generate_auto_employee_id(db) -> str:
+    users_ref = db.collection("users")
+    docs = users_ref.get()
+    next_number = len(docs) + 1
+    return f"TCI-{next_number:02d}"
+
+
 # --- Endpoints ---
+
+@router.post("/request-registration")
+def request_registration(req: RegistrationRequest):
+    """
+    1. Registrasi Akun Firebase Auth & Firestore
+    2. Ekstraksi Biometrik Wajah (Face Encoding)
+    3. Generasi Kode OTP WhatsApp (Status awal: 'unverified')
+    """
+    clean_email = req.email.lower().strip()
+    clean_phone = req.phone.strip().replace(" ", "").replace("-", "").lstrip("0")
+    full_phone = f"{req.countryCode.strip()}{clean_phone}"
+    
+    db = get_db()
+
+    # 1. Cek Email Duplikat di Firestore
+    existing_user = (
+        db.collection("users")
+        .where(filter=FieldFilter("email", "==", clean_email))
+        .limit(1)
+        .get()
+    )
+    if existing_user:
+        raise HTTPException(
+            status_code=400, 
+            detail="Email sudah pernah diajukan atau terdaftar."
+        )
+
+    # 2. Ekstrak Biometrik Wajah
+    pil_image = convert_and_resize_base64(req.photoBase64)
+    encoding_list, error_msg = detect_and_encode_face(pil_image)
+    if error_msg:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # 3. Generate Auto Employee ID (TCI-01, TCI-02, dst)
+    auto_emp_id = generate_auto_employee_id(db)
+
+    # 4. Generate OTP WhatsApp & Tanggal Expired (5 Menit)
+    otp_code = str(random.randint(100000, 999999))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires_at = now + datetime.timedelta(minutes=5)
+
+    # 5. Buat Akun Firebase Auth & Ambil UID
+    try:
+        user_record = firebase_auth.create_user(
+            email=clean_email,
+            password=req.password,
+            display_name=req.fullName,
+            disabled=False
+        )
+        user_uid = user_record.uid
+    except firebase_auth.EmailAlreadyExistsError:
+        raise HTTPException(status_code=400, detail="Email tersebut sudah terdaftar di Firebase Auth.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal membuat akun autentikasi: {str(e)}")
+
+    # 6. Simpan Dokumen Terpadu ke Firestore (Status: 'unverified')
+    db.collection("users").document(user_uid).set({
+        "uid": user_uid,
+        "fullName": req.fullName.strip(),
+        "employeeId": auto_emp_id,
+        "email": clean_email,
+        "phone": full_phone,
+        "departmentId": req.departmentId,
+        "role": req.role.lower() if req.role else "employee",
+        "status": "unverified",               # Belum lolos OTP WhatsApp
+        "isPhoneVerified": False,
+        "otpCode": otp_code,                  # Kode OTP disimpan di dokumen yang sama
+        "otpExpiresAt": expires_at.isoformat(),
+        "face_encoding": encoding_list,
+        "face_registered": True,
+        "createdAt": now.isoformat(),
+    })
+
+    # Simpan salinan OTP pada koleksi yang dipakai endpoint verifikasi/resend.
+    db.collection("otp_codes").document(user_uid).set({
+        "userId": user_uid,
+        "phoneNumber": full_phone,
+        "otpCode": otp_code,
+        "expiresAt": expires_at.isoformat(),
+        "createdAt": now.isoformat(),
+    })
+
+    # 7. Kirim Pesan OTP via WhatsApp Fonnte Gateway
+    wa_response = send_whatsapp_otp(full_phone, otp_code)
+
+    return {
+        "status": "success",
+        "userId": user_uid,
+        "employeeId": auto_emp_id,
+        "phoneNumber": full_phone,
+        "whatsappSent": bool(wa_response and wa_response.get("status") is True),
+        "message": f"Pengajuan akun berhasil! Kode OTP WhatsApp telah dikirimkan ke {full_phone}.",
+        "gateway_response": wa_response
+    }
+
+
 @router.post("/register-self-master")
 def register_self_master_face(req: RegisterFaceRequest):
+    """
+    Endpoint tambahan untuk update ulang/pendaftaran ulang wajah pengguna yang sudah ada
+    """
     clean_email = req.email.lower().strip()
     db = get_db()
 
@@ -108,76 +226,5 @@ def register_self_master_face(req: RegisterFaceRequest):
 
     return {
         "status": "success",
-        "message": "Registrasi wajah berhasil! Anda dapat menggunakan fitur absensi."
-    }
-
-def generate_auto_employee_id(db) -> str:
-    users_ref = db.collection("users")
-    docs = users_ref.get()
-    next_number = len(docs) + 1
-    return f"TCI-{next_number:02d}"
-
-@router.post("/request-registration")
-def request_registration(req: RegistrationRequest):
-    clean_email = req.email.lower().strip()
-    db = get_db()
-
-    # 1. Cek Email Duplikat di Firestore
-    existing_user = (
-        db.collection("users")
-        .where(filter=FieldFilter("email", "==", clean_email))
-        .limit(1)
-        .get()
-    )
-    if existing_user:
-        raise HTTPException(
-            status_code=400, 
-            detail="Email sudah pernah diajukan atau terdaftar."
-        )
-
-    # 2. Ekstrak Biometrik Wajah
-    pil_image = convert_and_resize_base64(req.photoBase64)
-    encoding_list, error_msg = detect_and_encode_face(pil_image)
-    if error_msg:
-        raise HTTPException(status_code=400, detail=error_msg)
-
-    # 3. Generate Auto Employee ID (TCI-01, TCI-02, dst)
-    auto_emp_id = generate_auto_employee_id(db)
-
-    # 4. Format Nomor Telepon Lengkap
-    full_phone = f"{req.countryCode}{req.phone.lstrip('0')}" if req.phone else None
-
-    # 5. Buat Akun Firebase Auth & Ambil UID
-    try:
-        user_record = firebase_auth.create_user(
-            email=clean_email,
-            password=req.password,
-            display_name=req.fullName,
-            disabled=False
-        )
-        user_uid = user_record.uid
-    except firebase_auth.EmailAlreadyExistsError:
-        raise HTTPException(status_code=400, detail="Email tersebut sudah terdaftar di Firebase Auth.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Gagal membuat akun autentikasi: {str(e)}")
-
-    # 6. Simpan ke Firestore
-    db.collection("users").document(user_uid).set({
-        "uid": user_uid,
-        "fullName": req.fullName,
-        "employeeId": auto_emp_id,  # ID Karyawan Otomatis
-        "email": clean_email,
-        "phone": full_phone,
-        "departmentId": req.departmentId,
-        "role": "employee",
-        "status": "pending_approval",  # Menunggu Persetujuan HR
-        "face_encoding": encoding_list,
-        "face_registered": True,
-        "createdAt": google_firestore.SERVER_TIMESTAMP,
-    })
-
-    return {
-        "status": "success",
-        "employeeId": auto_emp_id,
-        "message": f"Pengajuan akun berhasil! ID Karyawan Anda: {auto_emp_id}. Silakan tunggu konfirmasi HRD."
+        "message": "Pembaruan biometrik wajah berhasil!"
     }

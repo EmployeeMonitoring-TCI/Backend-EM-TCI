@@ -1,10 +1,56 @@
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from services.whatsapp import send_whatsapp_message
 from typing import Optional
 import firebase_admin
 from firebase_admin import firestore
+from google.cloud import firestore as google_firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 router = APIRouter(prefix="/api/employees", tags=["Employee Management"])
+
+class ApprovalDecision(BaseModel):
+    status: str
+
+@router.patch("/{user_id}/approval")
+def decide_employee_account(user_id: str, decision: ApprovalDecision):
+    if decision.status not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Status keputusan tidak valid.")
+
+    db = get_db()
+    user_ref = db.collection("users").document(user_id)
+    user_doc = user_ref.get()
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    user_data = user_doc.to_dict() or {}
+    user_ref.update({
+        "status": decision.status,
+        "approvalStatus": decision.status,
+        "approvedAt": google_firestore.SERVER_TIMESTAMP,
+    })
+
+    phone = str(user_data.get("phone", "")).strip()
+    name = user_data.get("fullName", "Karyawan")
+    if decision.status == "approved":
+        message = (
+            f"✅ *Akun Anda Disetujui*\n\n"
+            f"Halo {name}, akun Employee Monitoring Anda telah disetujui oleh HR. "
+            f"Silakan login menggunakan email dan kata sandi Anda."
+        )
+    else:
+        message = (
+            f"❌ *Pengajuan Akun Ditolak*\n\n"
+            f"Halo {name}, pengajuan akun Employee Monitoring Anda ditolak oleh HR. "
+            f"Silakan hubungi HR untuk informasi lebih lanjut."
+        )
+
+    whatsapp_response = send_whatsapp_message(phone, message) if phone else None
+    return {
+        "status": "success",
+        "approvalStatus": decision.status,
+        "whatsappSent": bool(whatsapp_response and whatsapp_response.get("status") is True),
+    }
 
 def get_db():
     app = firebase_admin.get_app()

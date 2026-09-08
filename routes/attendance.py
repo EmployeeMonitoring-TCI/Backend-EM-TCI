@@ -42,6 +42,22 @@ def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: fl
     
     return R * c
 
+def has_already_attended(email: str, attendance_type: str) -> bool:
+    db_firestore = get_db()
+    today = datetime.now().date()
+    start_of_day = datetime.combine(today, time.min)
+    end_of_day = datetime.combine(today, time.max)
+
+    # Query mencari data absensi jenis tertentu milik user pada hari ini
+    docs = db_firestore.collection("attendances") \
+        .where(filter=FieldFilter("email", "==", email.lower().strip())) \
+        .where(filter=FieldFilter("type", "==", attendance_type)) \
+        .where(filter=FieldFilter("timestamp", ">=", start_of_day)) \
+        .where(filter=FieldFilter("timestamp", "<=", end_of_day)) \
+        .limit(1).get()
+
+    return len(docs) > 0
+
 def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
     """Membandingkan foto selfie dengan face_encoding master di database."""
     try:
@@ -66,7 +82,7 @@ def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
         known_encoding = np.array(known_encoding_list)
         unknown_encoding = unknown_encodings[0]
 
-        # Jarak euclidean antara 2 fitur wajah (Threshold default = 0.6)
+        # Jarak euclidean antara 2 fitur wajah
         face_distances = face_recognition.face_distance([known_encoding], unknown_encoding)
         match_results = face_recognition.compare_faces([known_encoding], unknown_encoding, tolerance=0.55)
 
@@ -78,45 +94,94 @@ def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
 
 @router.post("/check-in")
 def check_in_attendance(req: CheckInRequest):
+    clean_email = req.email.lower().strip()
+
+    # 1. CEK APABILA SUDAH CHECK-IN HARI INI
+    if has_already_attended(clean_email, "CHECK_IN"):
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal Absen Masuk: Anda sudah melakukan presensi masuk untuk hari ini."
+        )
+
     db_firestore = get_db()
-    db = firestore.client()
-    now = datetime.now() # Waktu saat absensi dilakukan
-    
-    # 1. Tentukan batas jam masuk kantor: pukul 09:00:00
-    work_start_time = time(9, 0, 0)
+    now = datetime.now()
     current_time = now.time()
+
+    # 2. VALIDASI JAM MASUK (09:00 - 18:00 WIB)
+    work_start_time = time(9, 0, 0)
+    work_end_time = time(18, 0, 0)
+
+    if not (work_start_time <= current_time < work_end_time):
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal Absen Masuk: Presensi masuk hanya dapat dilakukan pada jam 09:00 - 18:00 WIB."
+        )
+
+    # 3. GEOFENCE CHECK
+    office_doc = db_firestore.collection("offices").document("main_office").get()
+    if office_doc.exists:
+        office_data = office_doc.to_dict() or {}
+        office_lat = float(office_data.get("latitude", -6.4488101))
+        office_lon = float(office_data.get("longitude", 106.7342183))
+        radius_limit = float(office_data.get("radius_meters", 100.0))
+    else:
+        office_lat, office_lon, radius_limit = -6.4488101, 106.7342183, 100.0
+
+    distance_meters = calculate_haversine_distance(req.latitude, req.longitude, office_lat, office_lon)
+    if distance_meters > radius_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Gagal Absen Masuk: Di luar area kantor ({int(distance_meters)}m). Maksimal {int(radius_limit)}m."
+        )
+
+    # 4. VERIFIKASI USER & WAJAH
+    user_ref = db_firestore.collection("users").document(req.uid)
+    user_doc = user_ref.get()
+    if not user_doc.exists:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    user_data = user_doc.to_dict() or {}
+    registered_email = str(user_data.get("email", "")).lower().strip()
+    if registered_email != clean_email:
+        raise HTTPException(status_code=403, detail="Data pengguna tidak sesuai.")
+
+    known_encoding = user_data.get("face_encoding")
+    if not user_data.get("face_registered") or not known_encoding:
+        raise HTTPException(status_code=400, detail="Wajah Anda belum terdaftar.")
+
+    if not req.photoBase64 or not verify_face_match(known_encoding, req.photoBase64):
+        raise HTTPException(status_code=400, detail="Gagal Absen Masuk: Wajah tidak sesuai dengan master data terdaftar.")
     
-    # 2. Cek Apakah Karyawan Terlambat
+    # 5. CEK KETERLAMBATAN
     is_late = current_time > work_start_time
-    
-    # Hitung estimasi menit keterlambatan
     late_minutes = 0
     if is_late:
         today_start = datetime.combine(now.date(), work_start_time)
         late_minutes = max(1, int((now - today_start).total_seconds() // 60))
 
-    # 3. Simpan ke Firestore Koleksi 'attendances'
-    attendance_ref = db.collection("attendances").document()
+    # 6. SIMPAN KE FIRESTORE
+    attendance_ref = db_firestore.collection("attendances").document()
     attendance_data = {
         "uid": req.uid,
-        "email": req.email,
+        "email": clean_email,
         "status": "SUCCESS",
         "type": "CHECK_IN",
         "timestamp": google_firestore.SERVER_TIMESTAMP,
         "latitude": req.latitude,
         "longitude": req.longitude,
-        "isLate": is_late,             # True jika terlambat
-        "lateMinutes": late_minutes     # Jumlah menit terlambat
+        "distance_meters": round(distance_meters, 2),
+        "face_verified": True,
+        "isLate": is_late,
+        "lateMinutes": late_minutes
     }
     attendance_ref.set(attendance_data)
 
-    # 4. Berikan Response dengan Peringatan (Warning)
     if is_late:
         return {
             "status": "warning",
             "isLate": True,
             "lateMinutes": late_minutes,
-            "message": f"Kamu terlambat {late_minutes} menit. Absensi tetap berhasil dicatat. (Batas masuk: 09:00)"
+            "message": f"Kamu terlambat {late_minutes} menit. Absensi tetap berhasil dicatat."
         }
     
     return {
@@ -126,19 +191,44 @@ def check_in_attendance(req: CheckInRequest):
         "message": "Absensi tepat waktu berhasil dicatat!"
     }
 
+
 @router.post("/check-out")
 def check_out_attendance(req: AttendanceRequest):
     clean_email = req.email.lower().strip()
 
-    # 1. Geofence Check
+    # 1. CEK DUA KONDISI PRASYARAT
+    if not has_already_attended(clean_email, "CHECK_IN"):
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal Absen Pulang: Anda belum melakukan presensi masuk hari ini."
+        )
+
+    if has_already_attended(clean_email, "CHECK_OUT"):
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal Absen Pulang: Anda sudah melakukan presensi pulang hari ini."
+        )
+
+    now = datetime.now()
+    current_time = now.time()
+
+    # 2. VALIDASI JAM PULANG (Sesudah 18:00 WIB)
+    work_end_time = time(18, 0, 0)
+    if current_time < work_end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="Gagal Absen Pulang: Presensi pulang belum dibuka. Absen pulang hanya dapat dilakukan setelah pukul 18:00 WIB."
+        )
+
+    # 3. GEOFENCE CHECK
     office_doc = db_firestore.collection("offices").document("main_office").get()
     if office_doc.exists:
         office_data = office_doc.to_dict() or {}
-        office_lat = float(office_data.get("latitude", -6.868741))
-        office_lon = float(office_data.get("longitude", 109.138472))
+        office_lat = float(office_data.get("latitude", -6.4488101))
+        office_lon = float(office_data.get("longitude", 106.7342183))
         radius_limit = float(office_data.get("radius_meters", 100.0))
     else:
-        office_lat, office_lon, radius_limit = -6.44871, 106.73431, 100.0
+        office_lat, office_lon, radius_limit = -6.4488101, 106.7342183, 100.0
 
     distance_meters = calculate_haversine_distance(req.latitude, req.longitude, office_lat, office_lon)
     if distance_meters > radius_limit:
@@ -147,7 +237,7 @@ def check_out_attendance(req: AttendanceRequest):
             detail=f"Gagal Absen Pulang: Di luar area kantor ({int(distance_meters)}m). Maksimal {int(radius_limit)}m."
         )
 
-    # 2. User & Face Verification
+    # 4. USER & FACE VERIFICATION
     user_docs = db_firestore.collection("users").where(filter=FieldFilter("email", "==", clean_email)).limit(1).get()
     if not user_docs:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
@@ -160,7 +250,7 @@ def check_out_attendance(req: AttendanceRequest):
     if not req.photoBase64 or not verify_face_match(known_encoding, req.photoBase64):
         raise HTTPException(status_code=400, detail="Gagal Absen Pulang: Wajah tidak sesuai dengan master data terdaftar.")
 
-    # 3. Simpan Record CHECK_OUT
+    # 5. SIMPAN RECORD CHECK_OUT
     attendance_data = {
         "email": clean_email,
         "latitude": req.latitude,
