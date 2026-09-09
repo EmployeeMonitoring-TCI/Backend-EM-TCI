@@ -48,15 +48,24 @@ def has_already_attended(email: str, attendance_type: str) -> bool:
     start_of_day = datetime.combine(today, time.min)
     end_of_day = datetime.combine(today, time.max)
 
-    # Query mencari data absensi jenis tertentu milik user pada hari ini
     docs = db_firestore.collection("attendances") \
         .where(filter=FieldFilter("email", "==", email.lower().strip())) \
-        .where(filter=FieldFilter("type", "==", attendance_type)) \
-        .where(filter=FieldFilter("timestamp", ">=", start_of_day)) \
-        .where(filter=FieldFilter("timestamp", "<=", end_of_day)) \
-        .limit(1).get()
+        .get()
 
-    return len(docs) > 0
+    for doc in docs:
+        data = doc.to_dict() or {}
+        timestamp = data.get("timestamp")
+        if getattr(timestamp, "tzinfo", None) is not None:
+            assert timestamp is not None
+            timestamp = timestamp.replace(tzinfo=None)
+        if (
+            data.get("type") == attendance_type
+            and timestamp is not None
+            and start_of_day <= timestamp <= end_of_day
+        ):
+            return True
+
+    return False
 
 def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
     """Membandingkan foto selfie dengan face_encoding master di database."""

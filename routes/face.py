@@ -15,7 +15,7 @@ from typing import Optional
 from firebase_admin import firestore, auth as firebase_auth
 
 from google.cloud.firestore_v1.base_query import FieldFilter
-from services.whatsapp import send_whatsapp_otp
+from services.whatsapp import send_whatsapp_message
 
 router = APIRouter(prefix="/api/face", tags=["Face Management"])
 
@@ -176,7 +176,7 @@ def request_registration(req: RegistrationRequest):
     })
 
     # 7. Kirim Pesan OTP via WhatsApp Fonnte Gateway
-    wa_response = send_whatsapp_otp(full_phone, otp_code)
+    wa_response = send_whatsapp_message(full_phone, otp_code)
 
     return {
         "status": "success",

@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException
 import firebase_admin
 from pydantic import BaseModel, EmailStr
 from firebase_admin import auth, firestore
+from typing import Optional
 
 from dotenv import load_dotenv
 
-from services.whatsapp import send_whatsapp_otp
-
+from services.whatsapp import send_whatsapp_message
 load_dotenv()
 
 SENDER_EMAIL = os.getenv("SMTP_SENDER_EMAIL", "")
@@ -31,7 +31,8 @@ def get_db():
 # MODEL SCHEMAS
 # ==========================================
 class SendOTPRequest(BaseModel):
-    identifier: str  # Bisa Email atau Nomor Telepon/WhatsApp
+    identifier: Optional[str] = None  # Bisa Email atau Nomor Telepon/WhatsApp
+    email: Optional[str] = None  # Kompatibilitas client versi lama
 
 class VerifyOTPRequest(BaseModel):
     identifier: str  # Email atau Nomor WhatsApp
@@ -75,7 +76,8 @@ def send_email_otp(to_email: str, otp_code: str):
 # ==========================================
 @router.post("/send-otp")
 def send_otp(req: SendOTPRequest):
-    clean_identifier = req.identifier.strip().lower().replace(" ", "").replace("-", "")
+    raw_identifier = req.identifier or req.email or ""
+    clean_identifier = raw_identifier.strip().lower().replace(" ", "").replace("-", "")
     if not clean_identifier:
         raise HTTPException(status_code=400, detail="Identifier (Email / No HP) tidak boleh kosong.")
 
@@ -112,7 +114,7 @@ def send_otp(req: SendOTPRequest):
         if not email_sent:
             print(f"⚠️ OTP Email gagal dikirim secara SMTP, namun tersimpan di Firestore: {otp_code}")
     else:
-        gateway_response = send_whatsapp_otp(clean_identifier, otp_code)
+        gateway_response = send_whatsapp_message(clean_identifier, otp_code)
 
     return {
         "status": "success",

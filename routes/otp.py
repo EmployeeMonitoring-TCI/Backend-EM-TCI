@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import firebase_admin
 from firebase_admin import firestore
 from google.cloud import firestore as google_firestore
-from services.whatsapp import send_whatsapp_otp
+from services.whatsapp import send_whatsapp_message
 
 router = APIRouter(prefix="/api/otp", tags=["OTP Security"])
 
@@ -45,7 +45,7 @@ def request_otp(req: RequestOTP):
     })
 
     # Kirim pesan via WhatsApp API
-    wa_response = send_whatsapp_otp(req.phoneNumber, otp_code)
+    wa_response = send_whatsapp_message(req.phoneNumber, otp_code)
 
     return {
         "status": "success",
@@ -80,11 +80,24 @@ def verify_otp(req: VerifyOTP):
 
     # OTP hanya memverifikasi nomor. Akun tetap menunggu keputusan HR.
     user_ref = db.collection("users").document(req.userId)
-    user_ref.update({
-        "status": "pending_approval",
-        "isPhoneVerified": True,
-        "verifiedAt": google_firestore.SERVER_TIMESTAMP
-    })
+    user_doc = user_ref.get()
+    if not user_doc.exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Data akun tidak ditemukan. Silakan ulangi proses registrasi.",
+        )
+
+    try:
+        user_ref.update({
+            "status": "pending_approval",
+            "isPhoneVerified": True,
+            "verifiedAt": google_firestore.SERVER_TIMESTAMP
+        })
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal memperbarui status akun: {error}",
+        )
 
     # Hapus dokumen OTP setelah berhasil diverifikasi
     otp_ref.delete()
