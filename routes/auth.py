@@ -148,9 +148,6 @@ def verify_otp(req: VerifyOTPRequest):
     if otp_data["otp"] != req.otp.strip(): # type: ignore
         raise HTTPException(status_code=400, detail="Kode OTP yang Anda masukkan salah.")
 
-    # Hapus dokumen OTP setelah berhasil diverifikasi
-    otp_ref.delete()
-
     return {
         "status": "success",
         "message": "Verifikasi OTP berhasil!",

@@ -29,6 +29,16 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
         "approvalStatus": decision.status,
         "approvedAt": google_firestore.SERVER_TIMESTAMP,
     })
+    db.collection("approval_history").add({
+        "userId": user_id,
+        "fullName": user_data.get("fullName", ""),
+        "email": user_data.get("email", ""),
+        "employeeId": user_data.get("employeeId", ""),
+        "departmentId": user_data.get("departmentId", ""),
+        "role": user_data.get("role", "employee"),
+        "status": decision.status,
+        "processedAt": google_firestore.SERVER_TIMESTAMP,
+    })
 
     phone = str(user_data.get("phone", "")).strip()
     name = user_data.get("fullName", "Karyawan")
