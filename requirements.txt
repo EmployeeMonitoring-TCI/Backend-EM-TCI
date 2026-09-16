@@ -1,5 +1,9 @@
 fastapi
-uvicorn
-flask
+uvicorn[standard]
 firebase-admin
 python-dotenv
+requests
+face-recognition
+numpy
+Pillow
+pydantic[email]

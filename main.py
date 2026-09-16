@@ -2,6 +2,7 @@ import firebase_admin
 from firebase_admin import credentials
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="Tri Cipta Integra API")
 
 CREDENTIAL_PATH = "serviceAccountKey.json"
@@ -18,13 +19,18 @@ try:
     firebase_admin.get_app()
 except ValueError:
     cred = credentials.Certificate(CREDENTIAL_PATH)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(
+        cred,
+        {"storageBucket": "employeemonitoring-c76543.firebasestorage.app"},
+    )
 
 from routes import auth, attendance, face, task, employee, profile, otp
 
 app.include_router(auth.router)
 app.include_router(attendance.router)
 app.include_router(face.router)
+app.include_router(task.router_clients)
+app.include_router(task.router_projects)
 app.include_router(task.router)
 app.include_router(employee.router) 
 app.include_router(profile.router)

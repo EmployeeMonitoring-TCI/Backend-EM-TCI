@@ -22,7 +22,7 @@ def send_whatsapp_message(phone_number: str, message: str):
     }
     payload = {
         "target": clean_phone,
-        "message": message,
+        "message": f"*Notifikasi Sistem*\n\nBerikut adalah OTP Anda:\n{message}\n\n_Pesan ini dikirim secara otomatis, terimakasih telah mendaftar di sistem kami._",
         "countryCode": "62"
     }
 
