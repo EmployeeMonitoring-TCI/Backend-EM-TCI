@@ -1,16 +1,55 @@
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, EmailStr, Field
 from services.whatsapp import send_whatsapp_message
 from typing import Optional
 import firebase_admin
-from firebase_admin import firestore
+from firebase_admin import auth, firestore
 from google.cloud import firestore as google_firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 router = APIRouter(prefix="/api/employees", tags=["Employee Management"])
+bearer_scheme = HTTPBearer(auto_error=False)
 
 class ApprovalDecision(BaseModel):
     status: str
+
+class AdminUserCreate(BaseModel):
+    fullName: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    role: str = "employee"
+    departmentId: str = ""
+    phone: str = ""
+
+class AdminUserUpdate(BaseModel):
+    fullName: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    role: str
+    departmentId: str = ""
+    phone: str = ""
+    password: Optional[str] = Field(default=None, min_length=6, max_length=128)
+
+def require_admin(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Token autentikasi wajib disertakan.")
+
+    try:
+        decoded_token = auth.verify_id_token(credentials.credentials)
+    except Exception as error:
+        raise HTTPException(status_code=401, detail="Token autentikasi tidak valid atau sudah kedaluwarsa.") from error
+
+    db = get_db()
+    user_doc = db.collection("users").document(decoded_token["uid"]).get()
+    if not user_doc.exists or (user_doc.to_dict() or {}).get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Hanya admin yang dapat mengelola akun pengguna.")
+    return decoded_token["uid"]
+
+def validate_role(role: str) -> str:
+    normalized_role = role.strip().lower().replace("_", "-")
+    if normalized_role not in {"employee", "lead-department", "lead", "leader", "hr", "admin"}:
+        raise HTTPException(status_code=400, detail="Role tidak valid.")
+    return normalized_role
 
 @router.patch("/{user_id}/approval")
 def decide_employee_account(user_id: str, decision: ApprovalDecision):
@@ -65,6 +104,95 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
 def get_db():
     app = firebase_admin.get_app()
     return firestore.client(app=app)
+
+@router.post("/admin/users")
+def create_user_by_admin(payload: AdminUserCreate, admin_uid: str = Depends(require_admin)):
+    del admin_uid
+    clean_email = payload.email.lower().strip()
+    role = validate_role(payload.role)
+    db = get_db()
+
+    try:
+        user_record = auth.create_user(
+            email=clean_email,
+            password=payload.password,
+            display_name=payload.fullName.strip(),
+        )
+    except auth.EmailAlreadyExistsError as error:
+        raise HTTPException(status_code=409, detail="Email sudah digunakan oleh akun lain.") from error
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Gagal membuat akun: {error}") from error
+
+    try:
+        db.collection("users").document(user_record.uid).set({
+            "uid": user_record.uid,
+            "fullName": payload.fullName.strip(),
+            "email": clean_email,
+            "role": role,
+            "departmentId": payload.departmentId.strip(),
+            "phone": payload.phone.strip(),
+            "status": "approved",
+            "approvalStatus": "approved",
+            "createdBy": "admin",
+            "createdAt": google_firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as error:
+        auth.delete_user(user_record.uid)
+        raise HTTPException(status_code=500, detail=f"Gagal menyimpan profil akun: {error}") from error
+
+    return {"status": "success", "userId": user_record.uid}
+
+@router.patch("/admin/users/{user_id}")
+def update_user_by_admin(user_id: str, payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
+    if user_id == admin_uid:
+        raise HTTPException(status_code=400, detail="Akun admin yang sedang digunakan tidak dapat diubah dari sini.")
+
+    role = validate_role(payload.role)
+    clean_email = payload.email.lower().strip()
+    db = get_db()
+    user_ref = db.collection("users").document(user_id)
+    if not user_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    try:
+        auth_updates = {"email": clean_email, "display_name": payload.fullName.strip()}
+        if payload.password:
+            auth_updates["password"] = payload.password
+        auth.update_user(user_id, **auth_updates)
+        user_ref.update({
+            "fullName": payload.fullName.strip(),
+            "email": clean_email,
+            "role": role,
+            "departmentId": payload.departmentId.strip(),
+            "phone": payload.phone.strip(),
+            "updatedAt": google_firestore.SERVER_TIMESTAMP,
+        })
+    except auth.EmailAlreadyExistsError as error:
+        raise HTTPException(status_code=409, detail="Email sudah digunakan oleh akun lain.") from error
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Gagal memperbarui akun: {error}") from error
+
+    return {"status": "success"}
+
+@router.delete("/admin/users/{user_id}")
+def delete_user_by_admin(user_id: str, admin_uid: str = Depends(require_admin)):
+    if user_id == admin_uid:
+        raise HTTPException(status_code=400, detail="Admin tidak dapat menghapus akun yang sedang digunakan.")
+
+    db = get_db()
+    user_ref = db.collection("users").document(user_id)
+    if not user_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    try:
+        auth.delete_user(user_id)
+        user_ref.delete()
+    except auth.UserNotFoundError:
+        user_ref.delete()
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Gagal menghapus akun: {error}") from error
+
+    return {"status": "success"}
 
 @router.get("/list")
 def get_employee_list(
