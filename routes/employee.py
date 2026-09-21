@@ -65,7 +65,6 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
     user_data = user_doc.to_dict() or {}
     user_ref.update({
         "status": decision.status,
-        "approvalStatus": decision.status,
         "approvedAt": google_firestore.SERVER_TIMESTAMP,
     })
     db.collection("approval_history").add({
@@ -97,7 +96,6 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
     whatsapp_response = send_whatsapp_message(phone, message) if phone else None
     return {
         "status": "success",
-        "approvalStatus": decision.status,
         "whatsappSent": bool(whatsapp_response and whatsapp_response.get("status") is True),
     }
 
@@ -132,7 +130,6 @@ def create_user_by_admin(payload: AdminUserCreate, admin_uid: str = Depends(requ
             "departmentId": payload.departmentId.strip(),
             "phone": payload.phone.strip(),
             "status": "approved",
-            "approvalStatus": "approved",
             "createdBy": "admin",
             "createdAt": google_firestore.SERVER_TIMESTAMP,
         })
