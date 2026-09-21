@@ -23,12 +23,16 @@ class AdminUserCreate(BaseModel):
     phone: str = ""
 
 class AdminUserUpdate(BaseModel):
+    userId: str = Field(min_length=1)
     fullName: str = Field(min_length=1, max_length=120)
     email: EmailStr
     role: str
     departmentId: str = ""
     phone: str = ""
     password: Optional[str] = Field(default=None, min_length=6, max_length=128)
+
+class AdminUserDelete(BaseModel):
+    userId: str = Field(min_length=1)
 
 def require_admin(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
     if not credentials:
@@ -41,8 +45,8 @@ def require_admin(credentials: HTTPAuthorizationCredentials = Depends(bearer_sch
 
     db = get_db()
     user_doc = db.collection("users").document(decoded_token["uid"]).get()
-    if not user_doc.exists or (user_doc.to_dict() or {}).get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Hanya admin yang dapat mengelola akun pengguna.")
+    if not user_doc.exists or (user_doc.to_dict() or {}).get("role") not in {"admin", "hr"}:
+        raise HTTPException(status_code=403, detail="Hanya HR/Admin yang dapat mengelola akun pengguna.")
     return decoded_token["uid"]
 
 def validate_role(role: str) -> str:
@@ -103,7 +107,7 @@ def get_db():
     app = firebase_admin.get_app()
     return firestore.client(app=app)
 
-@router.post("/admin/users")
+@router.post("/admin/users/create")
 def create_user_by_admin(payload: AdminUserCreate, admin_uid: str = Depends(require_admin)):
     del admin_uid
     clean_email = payload.email.lower().strip()
@@ -139,8 +143,9 @@ def create_user_by_admin(payload: AdminUserCreate, admin_uid: str = Depends(requ
 
     return {"status": "success", "userId": user_record.uid}
 
-@router.patch("/admin/users/{user_id}")
-def update_user_by_admin(user_id: str, payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
+@router.patch("/admin/users/update")
+def update_user_by_admin(payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
+    user_id = payload.userId
     if user_id == admin_uid:
         raise HTTPException(status_code=400, detail="Akun admin yang sedang digunakan tidak dapat diubah dari sini.")
 
@@ -171,8 +176,9 @@ def update_user_by_admin(user_id: str, payload: AdminUserUpdate, admin_uid: str 
 
     return {"status": "success"}
 
-@router.delete("/admin/users/{user_id}")
-def delete_user_by_admin(user_id: str, admin_uid: str = Depends(require_admin)):
+@router.post("/admin/users/delete")
+def delete_user_by_admin(payload: AdminUserDelete, admin_uid: str = Depends(require_admin)):
+    user_id = payload.userId
     if user_id == admin_uid:
         raise HTTPException(status_code=400, detail="Admin tidak dapat menghapus akun yang sedang digunakan.")
 
