@@ -54,7 +54,7 @@ def send_email_otp(to_email: str, otp_code: str):
         return False
 
     msg = MIMEText(
-        f"Kode OTP Verifikasi Akun PT Tri Cipta Integra Anda adalah: {otp_code}\n\n"
+        f"Kode Verifikasi Akun PT Tri Cipta Integra Anda adalah: {otp_code}\n\n"
         f"Kode ini berlaku selama 5 menit. Jangan bagikan kode ini kepada siapapun."
     )
     msg["Subject"] = "Kode OTP Verifikasi Akun"
@@ -112,13 +112,13 @@ def send_otp(req: SendOTPRequest):
     if is_email:
         email_sent = send_email_otp(clean_identifier, otp_code)
         if not email_sent:
-            print(f"⚠️ OTP Email gagal dikirim secara SMTP, namun tersimpan di Firestore: {otp_code}")
+            print(f"⚠️ Verifikasi Email gagal dikirim secara SMTP, namun tersimpan di Firestore: {otp_code}")
     else:
         gateway_response = send_whatsapp_message(clean_identifier, otp_code)
 
     return {
         "status": "success",
-        "message": f"Kode OTP berhasil diproses untuk {clean_identifier}.",
+        "message": f"Kode Verifikasi berhasil diproses untuk {clean_identifier}.",
         "gateway_response": gateway_response
     }
 
@@ -135,7 +135,7 @@ def verify_otp(req: VerifyOTPRequest):
     otp_doc = otp_ref.get()
 
     if not otp_doc.exists:
-        raise HTTPException(status_code=400, detail="Kode OTP tidak ditemukan atau belum diminta.")
+        raise HTTPException(status_code=400, detail="Kode Verifikasi tidak ditemukan atau belum diminta.")
 
     otp_data = otp_doc.to_dict()
 
@@ -144,15 +144,15 @@ def verify_otp(req: VerifyOTPRequest):
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     
     if now_utc > expires_at:
-        raise HTTPException(status_code=400, detail="Kode OTP sudah kadaluarsa. Silakan minta ulang.")
+        raise HTTPException(status_code=400, detail="Kode Verifikasi sudah kadaluarsa. Silakan minta ulang.")
 
-    # Cek Kesesuaian Kode OTP
+    # Cek Kesesuaian Kode Verifikasi
     if otp_data["otp"] != req.otp.strip(): # type: ignore
-        raise HTTPException(status_code=400, detail="Kode OTP yang Anda masukkan salah.")
+        raise HTTPException(status_code=400, detail="Kode Verifikasi yang Anda masukkan salah.")
 
     return {
         "status": "success",
-        "message": "Verifikasi OTP berhasil!",
+        "message": "Verifikasi Verifikasi berhasil!",
         "role": req.role
     }
 
@@ -169,11 +169,11 @@ def reset_password(req: ResetPasswordRequest):
     otp_doc = otp_ref.get()
 
     if not otp_doc.exists:
-        raise HTTPException(status_code=400, detail="Sesi verifikasi OTP tidak ditemukan atau expired.")
+        raise HTTPException(status_code=400, detail="Sesi verifikasi Verifikasi tidak ditemukan atau expired.")
 
     otp_data = otp_doc.to_dict()
     if otp_data["otp"] != req.otp.strip(): # type: ignore
-        raise HTTPException(status_code=400, detail="Kode OTP salah.")
+        raise HTTPException(status_code=400, detail="Kode Verifikasi salah.")
 
     try:
         user = auth.get_user_by_email(clean_email)

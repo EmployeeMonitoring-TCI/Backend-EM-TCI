@@ -25,6 +25,15 @@ except ValueError:
     )
 
 from routes import auth, attendance, face, task, employee, profile, otp
+import importlib.util
+from pathlib import Path
+
+business_trip_spec = importlib.util.spec_from_file_location(
+    "business_trip_route", Path(__file__).parent / "routes" / "bussiness-trip.py"
+)
+business_trip_route = importlib.util.module_from_spec(business_trip_spec)
+assert business_trip_spec.loader is not None
+business_trip_spec.loader.exec_module(business_trip_route)
 
 app.include_router(auth.router)
 app.include_router(attendance.router)
@@ -35,6 +44,7 @@ app.include_router(task.router)
 app.include_router(employee.router) 
 app.include_router(profile.router)
 app.include_router(otp.router)
+app.include_router(business_trip_route.router)
 
 if __name__ == "__main__":
     import uvicorn
