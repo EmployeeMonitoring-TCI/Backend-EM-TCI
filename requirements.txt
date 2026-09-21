@@ -6,4 +6,7 @@ requests
 face-recognition
 numpy
 Pillow
+pandas
+fpdf2
+python-multipart
 pydantic[email]
