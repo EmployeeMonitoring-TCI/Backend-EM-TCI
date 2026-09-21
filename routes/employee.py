@@ -23,10 +23,10 @@ class AdminUserCreate(BaseModel):
     phone: str = ""
 
 class AdminUserUpdate(BaseModel):
-    userId: str = Field(min_length=1)
+    userId: Optional[str] = None
     fullName: str = Field(min_length=1, max_length=120)
     email: EmailStr
-    role: str
+    role: Optional[str] = None
     departmentId: str = ""
     phone: str = ""
     password: Optional[str] = Field(default=None, min_length=6, max_length=128)
@@ -149,16 +149,22 @@ def create_user_legacy(payload: AdminUserCreate, admin_uid: str = Depends(requir
 
 @router.patch("/admin/users/update")
 def update_user_by_admin(payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
-    user_id = payload.userId
+    user_id = (payload.userId or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=422, detail="userId wajib diisi untuk memperbarui akun.")
     if user_id == admin_uid:
         raise HTTPException(status_code=400, detail="Akun admin yang sedang digunakan tidak dapat diubah dari sini.")
 
-    role = validate_role(payload.role)
     clean_email = payload.email.lower().strip()
     db = get_db()
     user_ref = db.collection("users").document(user_id)
-    if not user_ref.get().exists:
+    user_doc = user_ref.get()
+    if not user_doc.exists:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
+
+    current_data = user_doc.to_dict() or {}
+    current_role = str(current_data.get("role", "employee"))
+    role = validate_role(payload.role or current_role)
 
     try:
         auth_updates = {"email": clean_email, "display_name": payload.fullName.strip()}
