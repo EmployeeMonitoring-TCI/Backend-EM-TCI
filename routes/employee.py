@@ -143,6 +143,10 @@ def create_user_by_admin(payload: AdminUserCreate, admin_uid: str = Depends(requ
 
     return {"status": "success", "userId": user_record.uid}
 
+@router.post("/admin/users")
+def create_user_legacy(payload: AdminUserCreate, admin_uid: str = Depends(require_admin)):
+    return create_user_by_admin(payload, admin_uid)
+
 @router.patch("/admin/users/update")
 def update_user_by_admin(payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
     user_id = payload.userId
@@ -176,6 +180,11 @@ def update_user_by_admin(payload: AdminUserUpdate, admin_uid: str = Depends(requ
 
     return {"status": "success"}
 
+@router.patch("/admin/users/{user_id}")
+def update_user_legacy(user_id: str, payload: AdminUserUpdate, admin_uid: str = Depends(require_admin)):
+    payload.userId = user_id
+    return update_user_by_admin(payload, admin_uid)
+
 @router.post("/admin/users/delete")
 def delete_user_by_admin(payload: AdminUserDelete, admin_uid: str = Depends(require_admin)):
     user_id = payload.userId
@@ -196,6 +205,10 @@ def delete_user_by_admin(payload: AdminUserDelete, admin_uid: str = Depends(requ
         raise HTTPException(status_code=400, detail=f"Gagal menghapus akun: {error}") from error
 
     return {"status": "success"}
+
+@router.delete("/admin/users/{user_id}")
+def delete_user_legacy(user_id: str, admin_uid: str = Depends(require_admin)):
+    return delete_user_by_admin(AdminUserDelete(userId=user_id), admin_uid)
 
 @router.get("/list")
 def get_employee_list(
