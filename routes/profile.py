@@ -27,7 +27,7 @@ def get_current_uid(authorization: Optional[str] = Header(default=None)) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Token autentikasi kosong.")
     try:
-        decoded_token = auth.verify_id_token(token, clock_skew_seconds=300)
+        decoded_token = auth.verify_id_token(token, clock_skew_seconds=60)
         return decoded_token["uid"]
     except auth.ExpiredIdTokenError as error:
         raise HTTPException(status_code=401, detail="Token autentikasi sudah kadaluarsa.") from error
