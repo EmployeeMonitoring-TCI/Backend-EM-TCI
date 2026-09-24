@@ -27,15 +27,17 @@ def get_current_uid(authorization: Optional[str] = Header(default=None)) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Token autentikasi kosong.")
     try:
-        decoded_token = auth.verify_id_token(token)
+        decoded_token = auth.verify_id_token(token, clock_skew_seconds=300)
         return decoded_token["uid"]
     except auth.ExpiredIdTokenError as error:
         raise HTTPException(status_code=401, detail="Token autentikasi sudah kadaluarsa.") from error
     except auth.RevokedIdTokenError as error:
         raise HTTPException(status_code=401, detail="Token autentikasi sudah dicabut.") from error
     except auth.InvalidIdTokenError as error:
+        print(f"[AUTH] Invalid Firebase ID token: {error}")
         raise HTTPException(status_code=401, detail="Token Firebase tidak valid atau berasal dari project berbeda.") from error
     except Exception as error:
+        print(f"[AUTH] Firebase token verification failed: {type(error).__name__}: {error}")
         raise HTTPException(status_code=401, detail="Token autentikasi tidak dapat diverifikasi oleh server.") from error
 
 
