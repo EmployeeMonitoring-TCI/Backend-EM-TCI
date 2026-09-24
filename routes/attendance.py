@@ -4,7 +4,7 @@ import io
 import math
 from typing import Optional
 import face_recognition
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 import numpy as np
 from PIL import Image, ImageOps
 from pydantic import BaseModel, EmailStr
@@ -12,10 +12,34 @@ from firestore_db import get_db
 from firebase_admin import firestore
 from google.cloud import firestore as google_firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
+from routes.profile import get_current_uid
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
 db_firestore = get_db()
+
+
+@router.get("/history")
+def get_attendance_history(uid: str = Depends(get_current_uid)):
+    """Return the authenticated user's attendance history through Admin SDK."""
+    db = get_db()
+    user_snapshot = db.collection("users").document(uid).get()
+    user_role = str((user_snapshot.to_dict() or {}).get("role", "")).lower()
+    attendance_query = db.collection("attendances")
+    if user_role not in {"hr", "admin", "leader"}:
+        attendance_query = attendance_query.where(filter=FieldFilter("uid", "==", uid))
+    docs = attendance_query.stream()
+
+    history = []
+    for document in docs:
+        data = document.to_dict() or {}
+        timestamp = data.get("timestamp")
+        if hasattr(timestamp, "isoformat"):
+            data["timestamp"] = timestamp.isoformat()
+        data["id"] = document.id
+        history.append(data)
+
+    return {"status": "success", "data": history}
 
 class AttendanceRequest(BaseModel):
     uid: str
