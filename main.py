@@ -31,8 +31,10 @@ from pathlib import Path
 business_trip_spec = importlib.util.spec_from_file_location(
     "business_trip_route", Path(__file__).parent / "routes" / "bussiness-trip.py"
 )
-business_trip_route = importlib.util.module_from_spec(business_trip_spec)
+business_trip_route = importlib.util.module_from_spec(business_trip_spec) # type: ignore
+assert business_trip_spec is not None
 assert business_trip_spec.loader is not None
+assert business_trip_spec is not None
 business_trip_spec.loader.exec_module(business_trip_route)
 
 app.include_router(auth.router)
@@ -48,4 +50,4 @@ app.include_router(business_trip_route.router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=12046, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=12045, reload=True)

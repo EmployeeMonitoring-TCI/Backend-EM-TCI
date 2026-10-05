@@ -35,6 +35,7 @@ def get_attendance_history(uid: str = Depends(get_current_uid)):
         data = document.to_dict() or {}
         timestamp = data.get("timestamp")
         if hasattr(timestamp, "isoformat"):
+            assert timestamp is not None
             data["timestamp"] = timestamp.isoformat()
         data["id"] = document.id
         history.append(data)

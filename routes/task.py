@@ -206,13 +206,52 @@ async def upload_attachment(
 def export_tasks_csv():
     db = get_db()
     tasks = [doc.to_dict() for doc in db.collection("tasks").stream()]
-    
-    if not tasks:
-        raise HTTPException(status_code=404, detail="Tidak ada data tugas.")
+    daily_reports = [doc.to_dict() for doc in db.collection("task_daily_reports").stream()]
 
-    df = pd.DataFrame(tasks)
+    export_rows = []
+
+    for task in tasks:
+        assert task is not None
+        export_rows.append({
+            "source": "task",
+            "taskId": task.get("id") or task.get("taskId") or "",
+            "rootTaskId": task.get("rootTaskId") or "",
+            "projectId": task.get("projectId") or "",
+            "projectName": task.get("projectName") or "",
+            "title": task.get("title") or "",
+            "description": task.get("description") or "",
+            "status": task.get("status") or "",
+            "employeeName": task.get("userName") or task.get("assignedToName") or task.get("employeeName") or "",
+            "employeeEmail": task.get("userEmail") or task.get("assignedToEmail") or task.get("employeeEmail") or "",
+            "workDate": task.get("workDate") or task.get("date") or "",
+            "submittedAt": task.get("submittedAt") or "",
+            "reportDescription": "",
+        })
+
+    for report in daily_reports:
+        assert report is not None
+        export_rows.append({
+            "source": "daily_report",
+            "taskId": report.get("taskId") or "",
+            "rootTaskId": report.get("rootTaskId") or report.get("taskId") or "",
+            "projectId": report.get("projectId") or "",
+            "projectName": report.get("projectName") or "",
+            "title": report.get("taskTitle") or "",
+            "description": report.get("description") or report.get("taskTitle") or "",
+            "status": "DAILY_REPORT",
+            "employeeName": report.get("employeeName") or "",
+            "employeeEmail": report.get("employeeEmail") or "",
+            "workDate": report.get("workDate") or "",
+            "submittedAt": report.get("submittedAt") or "",
+            "reportDescription": report.get("description") or "",
+        })
+
+    if not export_rows:
+        raise HTTPException(status_code=404, detail="Tidak ada data tugas atau daily report.")
+
+    df = pd.DataFrame(export_rows)
     csv_data = df.to_csv(index=False)
-    
+
     return Response(
         content=csv_data,
         media_type="text/csv",
@@ -223,17 +262,21 @@ def export_tasks_csv():
 def export_tasks_pdf():
     db = get_db()
     tasks = [doc.to_dict() for doc in db.collection("tasks").stream()]
-    
+    daily_reports = [doc.to_dict() for doc in db.collection("task_daily_reports").stream()]
+
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt="Laporan Status Proyek & Tugas", ln=True, align="C") # type: ignore
-    
-    for t in tasks:
-        pdf.cell(200, 10, txt=f"Project: {t.get('projectId', 'N/A')} | Task: {t.get('title', '')} | Status: {t.get('status', '')}", ln=True) # type: ignore
-        
+
+    for task in tasks:
+        pdf.cell(200, 10, txt=f"Project: {task.get('projectId', 'N/A')} | Task: {task.get('title', '')} | Status: {task.get('status', '')}", ln=True) # type: ignore
+
+    for report in daily_reports:
+        pdf.cell(200, 10, txt=f"Daily Report: {report.get('employeeName', 'Unknown')} | {report.get('taskTitle', report.get('title', ''))} | {report.get('workDate', '')}", ln=True) # type: ignore
+
     pdf_bytes = pdf.output(dest="S").encode("latin-1") # type: ignore
-    
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
