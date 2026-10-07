@@ -51,7 +51,7 @@ def require_admin(credentials: HTTPAuthorizationCredentials = Depends(bearer_sch
 
 def validate_role(role: str) -> str:
     normalized_role = role.strip().lower().replace("_", "-")
-    if normalized_role not in {"employee", "lead-department", "lead", "leader", "hr", "admin"}:
+    if normalized_role not in {"employee", "lead-department", "admin"}:
         raise HTTPException(status_code=400, detail="Role tidak valid.")
     return normalized_role
 
@@ -164,7 +164,9 @@ def update_user_by_admin(payload: AdminUserUpdate, admin_uid: str = Depends(requ
 
     current_data = user_doc.to_dict() or {}
     current_role = str(current_data.get("role", "employee"))
-    role = validate_role(payload.role or current_role)
+    requested_role = (payload.role or current_role).strip().lower().replace("_", "-")
+    current_role = current_role.strip().lower().replace("_", "-")
+    role = requested_role if requested_role == current_role else validate_role(requested_role)
 
     try:
         auth_updates = {"email": clean_email, "display_name": payload.fullName.strip()}

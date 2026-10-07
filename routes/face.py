@@ -102,6 +102,9 @@ def request_registration(req: RegistrationRequest):
     3. Generasi Kode OTP WhatsApp (Status awal: 'unverified')
     """
     clean_email = req.email.lower().strip()
+    role = (req.role or "employee").strip().lower().replace("_", "-")
+    if role not in {"employee", "lead-department"}:
+        raise HTTPException(status_code=400, detail="Role pendaftaran tidak valid.")
     clean_phone = req.phone.strip().replace(" ", "").replace("-", "").lstrip("0")
     full_phone = f"{req.countryCode.strip()}{clean_phone}"
     
@@ -156,7 +159,7 @@ def request_registration(req: RegistrationRequest):
         "email": clean_email,
         "phone": full_phone,
         "departmentId": req.departmentId,
-        "role": req.role.lower() if req.role else "employee",
+        "role": role,
         "status": "unverified",               # Belum lolos OTP WhatsApp
         "isPhoneVerified": False,
         "otpCode": otp_code,                  # Kode OTP disimpan di dokumen yang sama
