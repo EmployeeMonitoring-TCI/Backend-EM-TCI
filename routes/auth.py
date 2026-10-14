@@ -1,7 +1,8 @@
 import datetime
 from email.mime.text import MIMEText
+import logging
 import os
-import random
+import secrets
 import smtplib
 from fastapi import APIRouter, HTTPException
 import firebase_admin
@@ -13,6 +14,8 @@ from dotenv import load_dotenv
 
 from services.whatsapp import send_whatsapp_message
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 SENDER_EMAIL = os.getenv("SMTP_SENDER_EMAIL", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -50,8 +53,11 @@ class ResetPasswordRequest(BaseModel):
 # ==========================================
 def send_email_otp(to_email: str, otp_code: str):
     if not SENDER_EMAIL or not GMAIL_APP_PASSWORD:
-        print("⚠️ Warning: SMTP_SENDER_EMAIL atau GMAIL_APP_PASSWORD belum dikonfigurasi di .env")
-        return False
+        logger.error("OTP email delivery is unavailable because SMTP credentials are not configured.")
+        raise HTTPException(
+            status_code=503,
+            detail="Layanan email OTP belum dikonfigurasi. Hubungi administrator.",
+        )
 
     msg = MIMEText(
         f"Kode Verifikasi Akun PT Tri Cipta Integra Anda adalah: {otp_code}\n\n"
@@ -66,9 +72,12 @@ def send_email_otp(to_email: str, otp_code: str):
             server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
             server.sendmail(SENDER_EMAIL, [to_email], msg.as_string())
         return True
-    except Exception as e:
-        print(f"❌ Error SMTP Email: {str(e)}")
-        return False
+    except (OSError, smtplib.SMTPException):
+        logger.exception("OTP email delivery failed.")
+        raise HTTPException(
+            status_code=502,
+            detail="Email OTP gagal dikirim. Silakan coba lagi nanti.",
+        )
 
 
 # ==========================================
@@ -77,12 +86,14 @@ def send_email_otp(to_email: str, otp_code: str):
 @router.post("/send-otp")
 def send_otp(req: SendOTPRequest):
     raw_identifier = req.identifier or req.email or ""
-    clean_identifier = raw_identifier.strip().lower().replace(" ", "").replace("-", "")
+    clean_identifier = raw_identifier.strip().lower()
     if not clean_identifier:
         raise HTTPException(status_code=400, detail="Identifier (Email / No HP) tidak boleh kosong.")
 
     is_email = "@" in clean_identifier
-    otp_code = str(random.randint(100000, 999999))
+    if not is_email:
+        clean_identifier = clean_identifier.replace(" ", "").replace("-", "")
+    otp_code = str(secrets.randbelow(900000) + 100000)
     
     now = datetime.datetime.now(datetime.timezone.utc)
     expires_at = now + datetime.timedelta(minutes=5)
@@ -98,28 +109,40 @@ def send_otp(req: SendOTPRequest):
         }
         
         otp_ref.set(otp_payload)
-        print(f"✅ OTP Disimpan di Firestore untuk: {clean_identifier}")
 
-    except Exception as db_err:
-        print(f"❌ Error Firestore DB: {str(db_err)}")
+    except Exception:
+        logger.exception("Failed to persist an OTP in Firestore.")
         raise HTTPException(
             status_code=500, 
-            detail=f"Gagal menyimpan data OTP ke Firestore: {str(db_err)}"
+            detail="Gagal menyimpan kode OTP. Silakan coba lagi nanti.",
         )
 
     # Dispatch pengiriman berdasarkan jenis identifier (Email atau WhatsApp)
     gateway_response = None
     if is_email:
-        email_sent = send_email_otp(clean_identifier, otp_code)
-        if not email_sent:
-            print(f"⚠️ Verifikasi Email gagal dikirim secara SMTP, namun tersimpan di Firestore: {otp_code}")
+        try:
+            send_email_otp(clean_identifier, otp_code)
+        except HTTPException:
+            try:
+                otp_ref.delete()
+            except Exception:
+                logger.exception("Failed to remove an OTP after email delivery failed.")
+            raise
     else:
         gateway_response = send_whatsapp_message(clean_identifier, otp_code)
+        if not gateway_response or gateway_response.get("status") is not True:
+            try:
+                otp_ref.delete()
+            except Exception:
+                logger.exception("Failed to remove an OTP after WhatsApp delivery failed.")
+            raise HTTPException(
+                status_code=502,
+                detail="Kode OTP gagal dikirim melalui WhatsApp. Silakan coba lagi nanti.",
+            )
 
     return {
         "status": "success",
-        "message": f"Kode Verifikasi berhasil diproses untuk {clean_identifier}.",
-        "gateway_response": gateway_response
+        "message": "Kode verifikasi berhasil dikirim.",
     }
 
 
@@ -128,7 +151,9 @@ def send_otp(req: SendOTPRequest):
 # ==========================================
 @router.post("/verify-otp")
 def verify_otp(req: VerifyOTPRequest):
-    clean_identifier = req.identifier.strip().lower().replace(" ", "").replace("-", "")
+    clean_identifier = req.identifier.strip().lower()
+    if "@" not in clean_identifier:
+        clean_identifier = clean_identifier.replace(" ", "").replace("-", "")
     
     db = get_db()
     otp_ref = db.collection("otp_codes").document(clean_identifier)
@@ -172,6 +197,10 @@ def reset_password(req: ResetPasswordRequest):
         raise HTTPException(status_code=400, detail="Sesi verifikasi Verifikasi tidak ditemukan atau expired.")
 
     otp_data = otp_doc.to_dict()
+    expires_at = datetime.datetime.fromisoformat(otp_data["expiresAt"])  # type: ignore
+    if datetime.datetime.now(datetime.timezone.utc) > expires_at:
+        raise HTTPException(status_code=400, detail="Kode Verifikasi sudah kadaluarsa. Silakan minta ulang.")
+
     if otp_data["otp"] != req.otp.strip(): # type: ignore
         raise HTTPException(status_code=400, detail="Kode Verifikasi salah.")
 
