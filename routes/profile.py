@@ -6,6 +6,7 @@ from firebase_admin import auth, firestore
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/profile", tags=["Profile"])
+legacy_router = APIRouter(prefix="/profile", tags=["Profile"])
 
 
 class ProfileUpdate(BaseModel):
@@ -42,6 +43,7 @@ def get_current_uid(authorization: Optional[str] = Header(default=None)) -> str:
 
 
 @router.get("/me")
+@legacy_router.get("/me")
 def get_my_profile(uid: str = Depends(get_current_uid)):
     snapshot = get_db().collection("users").document(uid).get()
     if not snapshot.exists:
@@ -54,6 +56,7 @@ def get_my_profile(uid: str = Depends(get_current_uid)):
 
 
 @router.patch("/me")
+@legacy_router.patch("/me")
 def update_my_profile(payload: ProfileUpdate, uid: str = Depends(get_current_uid)):
     updates = payload.model_dump(exclude_unset=True)
     if "fullName" in updates and not updates["fullName"].strip():

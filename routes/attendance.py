@@ -1,8 +1,9 @@
 import base64
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import io
 import math
 from typing import Optional
+from zoneinfo import ZoneInfo
 import face_recognition
 from fastapi import APIRouter, HTTPException, Depends
 import numpy as np
@@ -17,6 +18,7 @@ from routes.profile import get_current_uid
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
 db_firestore = get_db()
+JAKARTA_TZ = ZoneInfo("Asia/Jakarta")
 
 
 @router.get("/history")
@@ -55,6 +57,7 @@ class CheckInRequest(BaseModel):
     photoBase64: str
     latitude: float
     longitude: float
+    lateNote: Optional[str] = ""
 
 def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000.0
@@ -70,9 +73,9 @@ def calculate_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: fl
 
 def has_already_attended(uid: str, attendance_type: str) -> bool:
     db_firestore = get_db()
-    today = datetime.now().date()
-    start_of_day = datetime.combine(today, time.min)
-    end_of_day = datetime.combine(today, time.max)
+    today = datetime.now(JAKARTA_TZ).date()
+    start_of_day = datetime.combine(today, time.min, tzinfo=JAKARTA_TZ)
+    end_of_day = start_of_day + timedelta(days=1)
 
     docs = db_firestore.collection("attendances") \
         .where(filter=FieldFilter("uid", "==", uid)) \
@@ -81,17 +84,57 @@ def has_already_attended(uid: str, attendance_type: str) -> bool:
     for doc in docs:
         data = doc.to_dict() or {}
         timestamp = data.get("timestamp")
-        if getattr(timestamp, "tzinfo", None) is not None:
-            assert timestamp is not None
-            timestamp = timestamp.replace(tzinfo=None)
+        if timestamp is not None:
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=JAKARTA_TZ)
+            else:
+                timestamp = timestamp.astimezone(JAKARTA_TZ)
         if (
             data.get("type") == attendance_type
             and timestamp is not None
-            and start_of_day <= timestamp <= end_of_day
+            and start_of_day <= timestamp < end_of_day
         ):
             return True
 
     return False
+
+
+def has_approved_wfh_for_date(uid: str, target_date) -> bool:
+    db = get_db()
+    requests = db.collection("leave_requests").where(
+        filter=FieldFilter("userId", "==", uid)
+    ).stream()
+    date_string = target_date.isoformat()
+    for request in requests:
+        data = request.to_dict() or {}
+        if data.get("type") != "wfh" or str(data.get("status", "")).upper() != "APPROVED":
+            continue
+        start_date = data.get("startDate")
+        end_date = data.get("endDate") or start_date
+        if isinstance(start_date, str) and isinstance(end_date, str) and start_date <= date_string <= end_date:
+            return True
+    return False
+
+
+def get_attendance_location(
+    uid: str,
+    latitude: float,
+    longitude: float,
+    target_date,
+) -> tuple[float, bool]:
+    office_doc = db_firestore.collection("offices").document("main_office").get()
+    if office_doc.exists:
+        office_data = office_doc.to_dict() or {}
+        office_lat = float(office_data.get("latitude", -6.4488101))
+        office_lon = float(office_data.get("longitude", 106.7342183))
+        radius_limit = float(office_data.get("radius_meters", 100.0))
+    else:
+        office_lat, office_lon, radius_limit = -6.4488101, 106.7342183, 100.0
+
+    distance_meters = calculate_haversine_distance(latitude, longitude, office_lat, office_lon)
+    is_wfh = has_approved_wfh_for_date(uid, target_date) or distance_meters > radius_limit
+    return distance_meters, is_wfh
+
 
 def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
     """Membandingkan foto selfie dengan face_encoding master di database."""
@@ -126,7 +169,6 @@ def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
     except Exception as e:
         print(f"[VERIFY FACE ERROR]: {str(e)}")
         return False
-
 @router.post("/check-in")
 def check_in_attendance(req: CheckInRequest):
     clean_email = req.email.lower().strip()
@@ -149,35 +191,30 @@ def check_in_attendance(req: CheckInRequest):
             detail="Gagal Absen Masuk: Anda sudah melakukan presensi masuk untuk hari ini."
         )
 
-    now = datetime.now()
+    now = datetime.now(JAKARTA_TZ)
     current_time = now.time()
 
-    # 2. VALIDASI JAM MASUK (09:00 - 18:00 WIB)
+    # 2. Check-in opens at 07:00; check-ins after 09:00 are recorded as late.
+    check_in_open_time = time(7, 0, 0)
     work_start_time = time(9, 0, 0)
     work_end_time = time(18, 0, 0)
 
-    if not (work_start_time <= current_time < work_end_time):
+    if not (check_in_open_time <= current_time < work_end_time):
         raise HTTPException(
             status_code=400,
-            detail="Gagal Absen Masuk: Presensi masuk hanya dapat dilakukan pada jam 09:00 - 18:00 WIB."
+            detail="Gagal Absen Masuk: Presensi masuk hanya dapat dilakukan pada jam 07:00 - 18:00 WIB."
         )
 
-    # 3. GEOFENCE CHECK
-    office_doc = db_firestore.collection("offices").document("main_office").get()
-    if office_doc.exists:
-        office_data = office_doc.to_dict() or {}
-        office_lat = float(office_data.get("latitude", -6.4488101))
-        office_lon = float(office_data.get("longitude", 106.7342183))
-        radius_limit = float(office_data.get("radius_meters", 100.0))
-    else:
-        office_lat, office_lon, radius_limit = -6.4488101, 106.7342183, 100.0
+    is_late = current_time > work_start_time
+    late_note = (req.lateNote or "").strip()
+    if is_late and not late_note:
+        raise HTTPException(status_code=400, detail="Catatan keterlambatan wajib diisi setelah pukul 09:00 WIB.")
+    if len(late_note) > 500:
+        raise HTTPException(status_code=400, detail="Catatan keterlambatan maksimal 500 karakter.")
 
-    distance_meters = calculate_haversine_distance(req.latitude, req.longitude, office_lat, office_lon)
-    if distance_meters > radius_limit:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Gagal Absen Masuk: Di luar area kantor ({int(distance_meters)}m). Maksimal {int(radius_limit)}m."
-        )
+    distance_meters, is_wfh = get_attendance_location(
+        req.uid, req.latitude, req.longitude, now.date()
+    )
 
     # 4. VERIFIKASI USER & WAJAH
     known_encoding = user_data.get("face_encoding")
@@ -188,10 +225,9 @@ def check_in_attendance(req: CheckInRequest):
         raise HTTPException(status_code=400, detail="Gagal Absen Masuk: Wajah tidak sesuai dengan master data terdaftar.")
     
     # 5. CEK KETERLAMBATAN
-    is_late = current_time > work_start_time
     late_minutes = 0
     if is_late:
-        today_start = datetime.combine(now.date(), work_start_time)
+        today_start = datetime.combine(now.date(), work_start_time, tzinfo=JAKARTA_TZ)
         late_minutes = max(1, int((now - today_start).total_seconds() // 60))
 
     # 6. SIMPAN KE FIRESTORE
@@ -205,10 +241,16 @@ def check_in_attendance(req: CheckInRequest):
         "latitude": req.latitude,
         "longitude": req.longitude,
         "distance_meters": round(distance_meters, 2),
+        "locationName": "WFH (Lokasi Bebas)" if is_wfh else "Studio Integra, Parung",
+        "isWfh": is_wfh,
+        "attendanceMode": "WFH" if is_wfh else "IN_OFFICE",
+        "userName": str(user_data.get("fullName") or user_data.get("name") or clean_email),
         "face_verified": True,
         "isLate": is_late,
         "lateMinutes": late_minutes
     }
+    if is_late:
+        attendance_data["lateNote"] = late_note
     attendance_ref.set(attendance_data)
 
     if is_late:
@@ -216,14 +258,18 @@ def check_in_attendance(req: CheckInRequest):
             "status": "warning",
             "isLate": True,
             "lateMinutes": late_minutes,
-            "message": f"Kamu terlambat {late_minutes} menit. Absensi tetap berhasil dicatat."
+            "isWfh": is_wfh,
+            "attendanceMode": "WFH" if is_wfh else "IN_OFFICE",
+            "message": f"Kamu terlambat {late_minutes} menit. Absensi tetap berhasil dicatat sebagai {'WFH' if is_wfh else 'IN OFFICE'}."
         }
     
     return {
         "status": "success",
         "isLate": False,
         "lateMinutes": 0,
-        "message": "Absensi tepat waktu berhasil dicatat!"
+        "isWfh": is_wfh,
+        "attendanceMode": "WFH" if is_wfh else "IN_OFFICE",
+        "message": f"Absensi tepat waktu berhasil dicatat sebagai {'WFH' if is_wfh else 'IN OFFICE'}."
     }
 
 
@@ -244,7 +290,7 @@ def check_out_attendance(req: AttendanceRequest):
             detail="Gagal Absen Pulang: Anda sudah melakukan presensi pulang hari ini."
         )
 
-    now = datetime.now()
+    now = datetime.now(JAKARTA_TZ)
     current_time = now.time()
 
     # 2. VALIDASI JAM PULANG (Sesudah 18:00 WIB)
@@ -255,24 +301,7 @@ def check_out_attendance(req: AttendanceRequest):
             detail="Gagal Absen Pulang: Presensi pulang belum dibuka. Absen pulang hanya dapat dilakukan setelah pukul 18:00 WIB."
         )
 
-    # 3. GEOFENCE CHECK
-    office_doc = db_firestore.collection("offices").document("main_office").get()
-    if office_doc.exists:
-        office_data = office_doc.to_dict() or {}
-        office_lat = float(office_data.get("latitude", -6.4488101))
-        office_lon = float(office_data.get("longitude", 106.7342183))
-        radius_limit = float(office_data.get("radius_meters", 100.0))
-    else:
-        office_lat, office_lon, radius_limit = -6.4488101, 106.7342183, 100.0
-
-    distance_meters = calculate_haversine_distance(req.latitude, req.longitude, office_lat, office_lon)
-    if distance_meters > radius_limit:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Gagal Absen Pulang: Di luar area kantor ({int(distance_meters)}m). Maksimal {int(radius_limit)}m."
-        )
-
-    # 4. USER & FACE VERIFICATION
+    # 3. USER VALIDATION AND WFH STATUS
     user_doc = db_firestore.collection("users").document(req.uid).get()
     if not user_doc.exists:
         raise HTTPException(status_code=404, detail="Data pengguna tidak ditemukan.")
@@ -281,6 +310,12 @@ def check_out_attendance(req: AttendanceRequest):
     registered_email = str(user_data.get("email", "")).lower().strip()
     if registered_email != clean_email:
         raise HTTPException(status_code=403, detail="Data pengguna tidak sesuai. Silakan buka ulang aplikasi agar email tersinkronisasi.")
+
+    distance_meters, is_wfh = get_attendance_location(
+        req.uid, req.latitude, req.longitude, now.date()
+    )
+
+    # 5. FACE VERIFICATION
     known_encoding = user_data.get("face_encoding")
     if not user_data.get("face_registered") or not known_encoding:
         raise HTTPException(status_code=400, detail="Wajah Anda belum terdaftar.")
@@ -288,13 +323,17 @@ def check_out_attendance(req: AttendanceRequest):
     if not req.photoBase64 or not verify_face_match(known_encoding, req.photoBase64):
         raise HTTPException(status_code=400, detail="Gagal Absen Pulang: Wajah tidak sesuai dengan master data terdaftar.")
 
-    # 5. SIMPAN RECORD CHECK_OUT
+    # 6. SIMPAN RECORD CHECK_OUT
     attendance_data = {
         "uid": req.uid,
         "email": clean_email,
         "latitude": req.latitude,
         "longitude": req.longitude,
         "distance_meters": round(distance_meters, 2),
+        "locationName": "WFH (Lokasi Bebas)" if is_wfh else "Studio Integra, Parung",
+        "isWfh": is_wfh,
+        "attendanceMode": "WFH" if is_wfh else "IN_OFFICE",
+        "userName": str(user_data.get("fullName") or user_data.get("name") or clean_email),
         "face_verified": True,
         "timestamp": google_firestore.SERVER_TIMESTAMP,
         "type": "CHECK_OUT",
@@ -305,6 +344,8 @@ def check_out_attendance(req: AttendanceRequest):
 
     return {
         "status": "success",
-        "message": f"Absen Pulang Berhasil! Jarak Anda ke kantor: {int(distance_meters)} meter.",
-        "distance": round(distance_meters, 2)
+        "message": "Absen pulang WFH berhasil dicatat." if is_wfh else f"Absen Pulang Berhasil! Jarak Anda ke kantor: {int(distance_meters)} meter.",
+        "distance": round(distance_meters, 2),
+        "isWfh": is_wfh,
+        "attendanceMode": "WFH" if is_wfh else "IN_OFFICE"
     }

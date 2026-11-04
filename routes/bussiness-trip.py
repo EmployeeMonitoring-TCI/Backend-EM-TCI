@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from datetime import date
 import firebase_admin
 from firebase_admin import firestore
 from google.cloud import firestore as google_firestore
@@ -16,6 +17,8 @@ class CreateTripClaimRequest(BaseModel):
     type: str # TRANSPORT | OVERTIME | STANDBY | ALLOWANCE
     transportType: Optional[str] = ""
     claimDate: str # Tanggal Kegiatan/Transaksi
+    tripStartDate: Optional[str] = None
+    tripEndDate: Optional[str] = None
     clientId: Optional[str] = ""
     clientName: str
     destination: Optional[str] = ""
@@ -50,6 +53,19 @@ def request_trip_claim(req: CreateTripClaimRequest):
     if not req.claimDate.strip():
         raise HTTPException(status_code=400, detail="Tanggal kegiatan/transaksi wajib diisi.")
 
+    trip_start_date = (req.tripStartDate or "").strip()
+    trip_end_date = (req.tripEndDate or "").strip()
+    if claim_type == "TRANSPORT" and transport_type == "SPD":
+        if not trip_start_date or not trip_end_date:
+            raise HTTPException(status_code=400, detail="Tanggal mulai dan selesai perjalanan SPD wajib diisi.")
+        try:
+            parsed_start = date.fromisoformat(trip_start_date)
+            parsed_end = date.fromisoformat(trip_end_date)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Tanggal perjalanan SPD tidak valid.") from error
+        if parsed_end < parsed_start:
+            raise HTTPException(status_code=400, detail="Tanggal selesai perjalanan tidak boleh sebelum tanggal mulai.")
+
     if not req.clientName.strip():
         raise HTTPException(status_code=400, detail="Perusahaan client wajib dipilih.")
         
@@ -67,6 +83,11 @@ def request_trip_claim(req: CreateTripClaimRequest):
         "type": claim_type,
         "transportType": transport_type if claim_type == "TRANSPORT" else "",
         "claimDate": req.claimDate.strip(),
+        **(
+            {"tripStartDate": trip_start_date, "tripEndDate": trip_end_date}
+            if claim_type == "TRANSPORT" and transport_type == "SPD"
+            else {}
+        ),
         "clientId": req.clientId.strip() if req.clientId else "",
         "clientName": req.clientName.strip(),
         "destination": req.destination.strip() if req.destination else "",

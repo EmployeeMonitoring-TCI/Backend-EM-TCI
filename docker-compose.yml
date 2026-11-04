@@ -1,0 +1,11 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "12046:12046"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./serviceAccountKey.json:/app/serviceAccountKey.json:ro
+    restart: unless-stopped

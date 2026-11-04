@@ -45,9 +45,10 @@ app.include_router(task.router_projects)
 app.include_router(task.router)
 app.include_router(employee.router) 
 app.include_router(profile.router)
+app.include_router(profile.legacy_router)
 app.include_router(otp.router)
 app.include_router(business_trip_route.router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=12045, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=12046, reload=True)
