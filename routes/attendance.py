@@ -23,14 +23,41 @@ JAKARTA_TZ = ZoneInfo("Asia/Jakarta")
 
 @router.get("/history")
 def get_attendance_history(uid: str = Depends(get_current_uid)):
-    """Return the authenticated user's attendance history through Admin SDK."""
+    """Return attendance visible to the authenticated user."""
     db = get_db()
     user_snapshot = db.collection("users").document(uid).get()
-    user_role = str((user_snapshot.to_dict() or {}).get("role", "")).lower()
-    attendance_query = db.collection("attendances")
-    if user_role not in {"hr", "admin", "leader"}:
-        attendance_query = attendance_query.where(filter=FieldFilter("uid", "==", uid))
-    docs = attendance_query.stream()
+    user_data = user_snapshot.to_dict() or {}
+    user_role = str(user_data.get("role", "")).strip().lower().replace("_", "-")
+
+    if user_role in {"hr", "admin", "leader"}:
+        docs = db.collection("attendances").stream()
+    elif user_role == "lead-department":
+        department_id = str(user_data.get("departmentId", "")).strip()
+        if not department_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Lead department belum memiliki departemen yang ditetapkan.",
+            )
+
+        department_users = db.collection("users").where(
+            filter=FieldFilter("departmentId", "==", department_id)
+        ).stream()
+        department_uids = {document.id for document in department_users}
+        department_uids.add(uid)
+        attendance_collection = db.collection("attendances")
+        docs = []
+        department_uid_list = list(department_uids)
+        for start in range(0, len(department_uid_list), 30):
+            uid_batch = department_uid_list[start:start + 30]
+            docs.extend(
+                attendance_collection.where(
+                    filter=FieldFilter("uid", "in", uid_batch)
+                ).stream()
+            )
+    else:
+        docs = db.collection("attendances").where(
+            filter=FieldFilter("uid", "==", uid)
+        ).stream()
 
     history = []
     for document in docs:
