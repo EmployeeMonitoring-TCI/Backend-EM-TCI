@@ -16,11 +16,13 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from routes.profile import get_current_uid
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
+legacy_router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 db_firestore = get_db()
 JAKARTA_TZ = ZoneInfo("Asia/Jakarta")
 
 
+@legacy_router.get("/history", include_in_schema=False)
 @router.get("/history")
 def get_attendance_history(uid: str = Depends(get_current_uid)):
     """Return attendance visible to the authenticated user."""
@@ -196,6 +198,7 @@ def verify_face_match(known_encoding_list: list, unknown_base64: str) -> bool:
     except Exception as e:
         print(f"[VERIFY FACE ERROR]: {str(e)}")
         return False
+@legacy_router.post("/check-in", include_in_schema=False)
 @router.post("/check-in")
 def check_in_attendance(req: CheckInRequest):
     clean_email = req.email.lower().strip()
@@ -300,6 +303,7 @@ def check_in_attendance(req: CheckInRequest):
     }
 
 
+@legacy_router.post("/check-out", include_in_schema=False)
 @router.post("/check-out")
 def check_out_attendance(req: AttendanceRequest):
     clean_email = req.email.lower().strip()

@@ -39,6 +39,7 @@ business_trip_spec.loader.exec_module(business_trip_route)
 
 app.include_router(auth.router)
 app.include_router(attendance.router)
+app.include_router(attendance.legacy_router)
 app.include_router(face.router)
 app.include_router(task.router_clients)
 app.include_router(task.router_projects)
