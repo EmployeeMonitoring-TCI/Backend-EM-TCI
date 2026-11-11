@@ -10,3 +10,4 @@ pandas
 fpdf2
 python-multipart
 pydantic[email]
+msvc-runtime; platform_system == "Windows"

@@ -1,3 +1,10 @@
+import os
+import sys
+
+_DLL_DIRECTORY_HANDLE = (
+    os.add_dll_directory(sys.prefix) if sys.platform == "win32" else None
+)
+
 import firebase_admin
 from firebase_admin import credentials
 from fastapi import FastAPI
