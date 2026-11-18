@@ -35,6 +35,12 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "https://studiouidesk.ddns.net:12045").rstrip("/")
 MOBILE_SCHEME = "employeemonitoring"
 
+# Email HR / Admin Default penerima notifikasi pengajuan cuti, expand, dan akun baru
+DEFAULT_HR_EMAILS = [
+    "fiismatunnissa@gmail.com",
+    "andhini.dini91@gmail.com",
+]
+
 
 def get_task_url(task_id: str, custom_base_url: Optional[str] = None) -> str:
     """Menghasilkan URL web langsung menuju detail task."""
@@ -678,7 +684,12 @@ def send_leave_request_submitted_email(
         f"Validasi pengajuan di: {action_url}\n"
     )
 
-    return send_html_email(admin_emails, subject, html, text_fallback)
+    targets = [admin_emails] if isinstance(admin_emails, str) else list(admin_emails or [])
+    for def_email in DEFAULT_HR_EMAILS:
+        if def_email.lower().strip() not in [t.lower().strip() for t in targets]:
+            targets.append(def_email)
+
+    return send_html_email(targets, subject, html, text_fallback)
 
 
 def send_leave_request_status_email(
@@ -828,7 +839,12 @@ def send_account_registration_submitted_email(
         f"Buka persetujuan akun: {action_url}\n"
     )
 
-    return send_html_email(admin_emails, subject, html, text_fallback)
+    targets = [admin_emails] if isinstance(admin_emails, str) else list(admin_emails or [])
+    for def_email in DEFAULT_HR_EMAILS:
+        if def_email.lower().strip() not in [t.lower().strip() for t in targets]:
+            targets.append(def_email)
+
+    return send_html_email(targets, subject, html, text_fallback)
 
 
 def send_account_approval_decision_email(
@@ -1011,7 +1027,12 @@ def send_expand_claim_submitted_email(
         f"Audit di: {action_url}\n"
     )
 
-    return send_html_email(admin_emails, subject, html, text_fallback)
+    targets = [admin_emails] if isinstance(admin_emails, str) else list(admin_emails or [])
+    for def_email in DEFAULT_HR_EMAILS:
+        if def_email.lower().strip() not in [t.lower().strip() for t in targets]:
+            targets.append(def_email)
+
+    return send_html_email(targets, subject, html, text_fallback)
 
 
 def send_expand_claim_status_email(
@@ -1165,7 +1186,12 @@ def send_account_registration_submitted_email(
         f"Buka persetujuan akun: {action_url}\n"
     )
 
-    return send_html_email(admin_emails, subject, html, text_fallback)
+    targets = [admin_emails] if isinstance(admin_emails, str) else list(admin_emails or [])
+    for def_email in DEFAULT_HR_EMAILS:
+        if def_email.lower().strip() not in [t.lower().strip() for t in targets]:
+            targets.append(def_email)
+
+    return send_html_email(targets, subject, html, text_fallback)
 
 
 def send_account_approval_decision_email(

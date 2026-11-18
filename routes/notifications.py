@@ -205,11 +205,18 @@ def find_leader_emails_for_task(task_id: str, root_task_id: Optional[str] = None
     return emails
 
 
+DEFAULT_HR_EMAILS = [
+    "fiismatunnissa@gmail.com",
+    "andhini.dini91@gmail.com",
+]
+
+
 def find_admin_emails() -> List[str]:
     """
     Mencari semua email HR/Admin di database Firestore untuk dikirimi notifikasi persetujuan.
+    Selalu mengikutsertakan DEFAULT_HR_EMAILS (fiismatunnissa@gmail.com, andhini.dini91@gmail.com).
     """
-    emails: List[str] = []
+    emails: List[str] = list(DEFAULT_HR_EMAILS)
     db = get_db()
     try:
         users_ref = db.collection("users")
@@ -228,7 +235,9 @@ def find_admin_emails() -> List[str]:
     # Fallback jika belum ada user HR di database
     from services.mailer import SENDER_EMAIL
     if not emails and SENDER_EMAIL and "@" in SENDER_EMAIL:
-        emails.append(SENDER_EMAIL.lower().strip())
+        clean_sender = SENDER_EMAIL.lower().strip()
+        if clean_sender not in emails:
+            emails.append(clean_sender)
 
     return emails
 

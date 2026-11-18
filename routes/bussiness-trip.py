@@ -252,7 +252,10 @@ def request_trip_claim(req: CreateTripClaimRequest, background_tasks: Background
     })
 
     if req.userEmail and "@" in req.userEmail:
-        admin_emails = [SENDER_EMAIL] if SENDER_EMAIL else []
+        from services.mailer import DEFAULT_HR_EMAILS
+        admin_emails = list(DEFAULT_HR_EMAILS)
+        if SENDER_EMAIL and SENDER_EMAIL.lower().strip() not in admin_emails:
+            admin_emails.append(SENDER_EMAIL.lower().strip())
         try:
             users_ref = db.collection("users")
             for r in ["hr", "admin"]:
