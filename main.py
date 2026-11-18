@@ -55,8 +55,11 @@ app.include_router(employee.router)
 app.include_router(profile.router)
 app.include_router(profile.legacy_router)
 app.include_router(otp.router)
+app.include_router(otp.router, prefix="/api")
 app.include_router(business_trip_route.router)
+app.include_router(business_trip_route.router, prefix="/api")
 app.include_router(notifications.router)
+app.include_router(notifications.router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn
