@@ -6,9 +6,10 @@ _DLL_DIRECTORY_HANDLE = (
 )
 
 import firebase_admin
-from firebase_admin import credentials
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
+from firebase_admin import credentials
 
 app = FastAPI(title="Tri Cipta Integra API")
 
@@ -44,22 +45,29 @@ assert business_trip_spec.loader is not None
 assert business_trip_spec is not None
 business_trip_spec.loader.exec_module(business_trip_route)
 
-app.include_router(auth.router)
-app.include_router(attendance.router)
-app.include_router(attendance.legacy_router)
-app.include_router(face.router)
-app.include_router(task.router_clients)
-app.include_router(task.router_projects)
-app.include_router(task.router)
-app.include_router(employee.router) 
-app.include_router(profile.router)
-app.include_router(profile.legacy_router)
-app.include_router(otp.router)
-app.include_router(otp.router, prefix="/api")
-app.include_router(business_trip_route.router)
-app.include_router(business_trip_route.router, prefix="/api")
-app.include_router(notifications.router)
-app.include_router(notifications.router, prefix="/api")
+# Daftar semua router dengan prefix aslinya (/api/...)
+all_routers = [
+    auth.router,
+    attendance.router,
+    attendance.legacy_router,
+    face.router,
+    task.router_clients,
+    task.router_projects,
+    task.router,
+    employee.router,
+    profile.router,
+    profile.legacy_router,
+    otp.router,
+    business_trip_route.router,
+    notifications.router,
+]
+
+for router in all_routers:
+    # Mount dengan prefix asli: /api/xxx
+    app.include_router(router)
+    # Mount dengan prefix ganda: /api/api/xxx
+    # Ini menangani kasus frontend yang mengirim BASE_API_URL=/api/ + /api/xxx
+    app.include_router(router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn
