@@ -31,7 +31,7 @@ except ValueError:
         {"storageBucket": "employeemonitoring-c76543.firebasestorage.app"},
     )
 
-from routes import auth, attendance, face, task, employee, profile, otp
+from routes import auth, attendance, face, task, employee, profile, otp, notifications
 import importlib.util
 from pathlib import Path
 
@@ -56,6 +56,7 @@ app.include_router(profile.router)
 app.include_router(profile.legacy_router)
 app.include_router(otp.router)
 app.include_router(business_trip_route.router)
+app.include_router(notifications.router)
 
 if __name__ == "__main__":
     import uvicorn

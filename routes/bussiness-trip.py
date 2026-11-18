@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -8,6 +8,11 @@ import firebase_admin
 from firebase_admin import auth, firestore
 from google.cloud import firestore as google_firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
+from services.mailer import (
+    send_expand_claim_submitted_email,
+    send_expand_claim_status_email,
+    SENDER_EMAIL,
+)
 
 router = APIRouter(prefix="/api/business-trip", tags=["Business Trip Claims"])
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -185,7 +190,7 @@ def create_admin_team_trip(
     }
 
 @router.post("/request")
-def request_trip_claim(req: CreateTripClaimRequest):
+def request_trip_claim(req: CreateTripClaimRequest, background_tasks: BackgroundTasks):
     claim_type = req.type.upper().strip()
     if claim_type not in ["TRANSPORT", "OVERTIME", "STANDBY", "ALLOWANCE"]:
         raise HTTPException(status_code=400, detail="Tipe klaim tidak valid.")
@@ -246,6 +251,34 @@ def request_trip_claim(req: CreateTripClaimRequest):
         **({"allowanceType": req.allowanceType} if claim_type == "ALLOWANCE" else {}),
     })
 
+    if req.userEmail and "@" in req.userEmail:
+        admin_emails = [SENDER_EMAIL] if SENDER_EMAIL else []
+        try:
+            users_ref = db.collection("users")
+            for r in ["hr", "admin"]:
+                for u in users_ref.where(filter=FieldFilter("role", "==", r)).stream():
+                    em = (u.to_dict() or {}).get("email")
+                    if em and "@" in em and em.lower().strip() not in admin_emails:
+                        admin_emails.append(em.lower().strip())
+        except Exception:
+            pass
+
+        background_tasks.add_task(
+            send_expand_claim_submitted_email,
+            admin_emails=admin_emails,
+            employee_name=req.userName or "Karyawan",
+            employee_email=req.userEmail.lower().strip(),
+            claim_type=claim_type,
+            amount=req.amount,
+            purpose=req.purpose.strip(),
+            claim_date=req.claimDate.strip(),
+            client_name=req.clientName.strip(),
+            destination=req.destination.strip() if req.destination else "",
+            transport_type=transport_type,
+            trip_start_date=trip_start_date if trip_start_date else None,
+            trip_end_date=trip_end_date if trip_end_date else None,
+        )
+
     return {
         "status": "success",
         "message": "Pengajuan berkas perjalanan bisnis berhasil dibuat.",
@@ -253,7 +286,7 @@ def request_trip_claim(req: CreateTripClaimRequest):
     }
 
 @router.patch("/{claim_id}/audit")
-def audit_trip_claim(claim_id: str, req: AuditTripClaimRequest):
+def audit_trip_claim(claim_id: str, req: AuditTripClaimRequest, background_tasks: BackgroundTasks):
     if req.status not in ["APPROVED", "REJECTED"]:
         raise HTTPException(status_code=400, detail="Status audit tidak valid.")
 
@@ -264,10 +297,24 @@ def audit_trip_claim(claim_id: str, req: AuditTripClaimRequest):
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Data pengajuan tidak ditemukan.")
 
+    claim_data = doc.to_dict() or {}
+
     ref.update({
         "status": req.status,
         "auditedAt": google_firestore.SERVER_TIMESTAMP
     })
+
+    user_email = claim_data.get("userEmail")
+    if user_email and "@" in user_email:
+        background_tasks.add_task(
+            send_expand_claim_status_email,
+            employee_email=user_email,
+            employee_name=claim_data.get("userName") or "Karyawan",
+            status=req.status,
+            claim_type=claim_data.get("type") or "Expand",
+            amount=float(claim_data.get("amount") or 0),
+            purpose=claim_data.get("purpose") or "",
+        )
 
     return {
         "status": "success",
@@ -275,7 +322,7 @@ def audit_trip_claim(claim_id: str, req: AuditTripClaimRequest):
     }
 
 @router.post("/finance/bulk-approve")
-def finance_bulk_approve(req: BulkApproveRequest):
+def finance_bulk_approve(req: BulkApproveRequest, background_tasks: BackgroundTasks):
     """
     Endpoint Backend untuk memproses massal klaim (Bulk Approve) dari HR/Finance
     sekaligus mencatat nominal pencairan.
@@ -285,6 +332,7 @@ def finance_bulk_approve(req: BulkApproveRequest):
     
     processed_count = 0
     total_net_payout = 0
+    approved_claims_list = []
 
     try:
         for claim_id in req.claim_ids:
@@ -309,8 +357,32 @@ def finance_bulk_approve(req: BulkApproveRequest):
             
             processed_count += 1
             total_net_payout += gross_amount
+            approved_claims_list.append({
+                "claimId": claim_id,
+                "userEmail": data.get("userEmail"),
+                "userName": data.get("userName") or "Karyawan",
+                "type": data.get("type") or "Expand",
+                "amount": gross_amount,
+                "purpose": data.get("purpose") or "",
+            })
 
         batch.commit()
+
+        # Kirim email notifikasi pencairan expand ke setiap karyawan
+        for c in approved_claims_list:
+            if c.get("userEmail") and "@" in c["userEmail"]:
+                background_tasks.add_task(
+                    send_expand_claim_status_email,
+                    employee_email=c["userEmail"],
+                    employee_name=c["userName"],
+                    status="APPROVED",
+                    claim_type=c["type"],
+                    amount=c["amount"],
+                    approved_amount=c["amount"],
+                    purpose=c["purpose"],
+                    approver_notes=f"Disetujui dan dicairkan oleh Finance ({req.approved_by})",
+                )
+
         return {
             "status": "success",
             "message": f"Berhasil memproses pencairan untuk {processed_count} pengajuan.",

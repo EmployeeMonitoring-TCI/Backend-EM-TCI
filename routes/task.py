@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -7,13 +7,13 @@ from firebase_admin import firestore
 from firebase_admin import storage
 from google.cloud import firestore as google_firestore
 import pandas as pd
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi import Form
+from fastapi import UploadFile, File, Form
 from fastapi.responses import Response
 from fpdf import FPDF
 from firestore_db import get_db
 import io
 import uuid
+from services.mailer import send_task_assignment_email
 
 router_projects = APIRouter(prefix="/api/projects", tags=["Projects"])
 router_clients = APIRouter(prefix="/api/clients", tags=["Clients"])
@@ -98,7 +98,7 @@ def create_project(req: CreateProjectRequest):
     }
 
 @router.post("/create")
-def create_task(req: CreateTaskRequest):
+def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks):
     """
     Endpoint untuk Karyawan mendaftarkan tugas baru di hari itu
     """
@@ -126,6 +126,17 @@ def create_task(req: CreateTaskRequest):
     }
     
     task_ref.set(task_data)
+
+    if req.userEmail and "@" in req.userEmail:
+        background_tasks.add_task(
+            send_task_assignment_email,
+            task_id=task_ref.id,
+            task_title=req.title.strip(),
+            task_description=req.description.strip(),
+            assigned_to_email=req.userEmail.lower().strip(),
+            assigned_to_name=req.userName or "Karyawan",
+            assigned_by_name="Leader",
+        )
 
     return {
         "status": "success",

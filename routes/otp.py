@@ -1,11 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import random
 from datetime import datetime, timedelta, timezone
 import firebase_admin
 from firebase_admin import firestore
 from google.cloud import firestore as google_firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from services.whatsapp import send_whatsapp_message
+from services.mailer import send_account_registration_submitted_email, SENDER_EMAIL
 
 router = APIRouter(prefix="/api/otp", tags=["OTP Security"])
 
@@ -54,7 +56,7 @@ def request_otp(req: RequestOTP):
     }
 
 @router.post("/verify")
-def verify_otp(req: VerifyOTP):
+def verify_otp(req: VerifyOTP, background_tasks: BackgroundTasks):
     """
     Memvalidasi kode OTP yang diinputkan pengguna
     """
@@ -93,6 +95,36 @@ def verify_otp(req: VerifyOTP):
             "isPhoneVerified": True,
             "verifiedAt": google_firestore.SERVER_TIMESTAMP
         })
+
+        # Notifikasi Email ke HRD/Admin bahwa ada akun baru yang menunggu approval
+        user_data = user_doc.to_dict() or {}
+        emp_name = user_data.get("fullName") or "Calon Karyawan"
+        emp_email = user_data.get("email") or ""
+        emp_phone = user_data.get("phone") or req.phoneNumber
+        emp_dept = user_data.get("departmentId") or ""
+        emp_id = user_data.get("employeeId") or ""
+
+        admin_emails = [SENDER_EMAIL] if SENDER_EMAIL else []
+        try:
+            users_ref = db.collection("users")
+            for r in ["hr", "admin"]:
+                for u in users_ref.where(filter=FieldFilter("role", "==", r)).stream():
+                    em = (u.to_dict() or {}).get("email")
+                    if em and "@" in em and em.lower().strip() not in admin_emails:
+                        admin_emails.append(em.lower().strip())
+        except Exception:
+            pass
+
+        if admin_emails and emp_email:
+            background_tasks.add_task(
+                send_account_registration_submitted_email,
+                admin_emails=admin_emails,
+                employee_name=emp_name,
+                employee_email=emp_email,
+                phone=emp_phone,
+                department_id=emp_dept,
+                employee_id=emp_id,
+            )
     except Exception as error:
         raise HTTPException(
             status_code=500,

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from services.whatsapp import send_whatsapp_message
+from services.mailer import send_account_approval_decision_email
 from typing import Optional
 import firebase_admin
 from firebase_admin import auth, firestore
@@ -56,7 +57,7 @@ def validate_role(role: str) -> str:
     return normalized_role
 
 @router.patch("/{user_id}/approval")
-def decide_employee_account(user_id: str, decision: ApprovalDecision):
+def decide_employee_account(user_id: str, decision: ApprovalDecision, background_tasks: BackgroundTasks):
     if decision.status not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="Status keputusan tidak valid.")
 
@@ -84,6 +85,8 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
 
     phone = str(user_data.get("phone", "")).strip()
     name = user_data.get("fullName", "Karyawan")
+    user_email = str(user_data.get("email", "")).strip().lower()
+
     if decision.status == "approved":
         message = (
             f"✅ *Akun Anda Disetujui*\n\n"
@@ -97,9 +100,19 @@ def decide_employee_account(user_id: str, decision: ApprovalDecision):
             f"Silakan hubungi HR untuk informasi lebih lanjut."
         )
 
+    # Kirim Notifikasi Email Otomatis ke Karyawan
+    if user_email and "@" in user_email:
+        background_tasks.add_task(
+            send_account_approval_decision_email,
+            employee_email=user_email,
+            employee_name=name,
+            status=decision.status,
+        )
+
     whatsapp_response = send_whatsapp_message(phone, message) if phone else None
     return {
         "status": "success",
+        "emailSent": bool(user_email and "@" in user_email),
         "whatsappSent": bool(whatsapp_response and whatsapp_response.get("status") is True),
     }
 
