@@ -369,6 +369,30 @@ def create_client(req: CreateClientRequest):
         "clientId": client_ref.id,
     }
 
+@router_clients.delete("/{client_id}")
+def delete_client(
+    client_id: str,
+    identity: dict[str, str] = Depends(get_leader_identity),
+):
+    db = get_db()
+    client_ref = db.collection("clients").document(client_id)
+    if not client_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Client tidak ditemukan.")
+
+    active_projects = [
+        project
+        for project in db.collection("projects").where("clientId", "==", client_id).stream()
+        if not (project.to_dict() or {}).get("isArchived")
+    ]
+    if active_projects:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Client masih digunakan oleh {len(active_projects)} project aktif.",
+        )
+
+    client_ref.delete()
+    return {"status": "success", "message": "Client berhasil dihapus."}
+
 @router_projects.post("/create")
 def create_project(req: CreateProjectRequest):
     if not req.name.strip() or not req.clientId.strip() or not req.deadline.strip():

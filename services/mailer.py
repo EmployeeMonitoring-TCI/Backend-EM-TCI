@@ -44,8 +44,14 @@ DEFAULT_HR_EMAILS = [
 
 def get_task_url(task_id: str, custom_base_url: Optional[str] = None) -> str:
     """Menghasilkan URL web langsung menuju detail task."""
+    return f"{get_web_base_url(custom_base_url)}/task/{task_id}"
+
+
+def get_web_base_url(custom_base_url: Optional[str] = None) -> str:
     base = (custom_base_url or APP_BASE_URL).rstrip("/")
-    return f"{base}/task/{task_id}"
+    if base.lower().endswith("/api"):
+        base = base[:-4]
+    return base
 
 
 def get_mobile_task_url(task_id: str) -> str:
@@ -626,7 +632,7 @@ def send_leave_request_submitted_email(
     """
     Karyawan -> Admin: Memberitahu Admin/HR bahwa ada pengajuan cuti/izin/WFH baru.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/hr/leave-management"
 
     periode = f"{start_date} s/d {end_date}" if end_date and end_date != start_date else start_date
@@ -705,7 +711,7 @@ def send_leave_request_status_email(
     """
     Admin -> Karyawan: Memberitahu Karyawan bahwa pengajuan cutinya telah Disetujui / Ditolak oleh HR.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/employee/leave-request"
 
     is_approved = status.upper() == "APPROVED"
@@ -787,7 +793,7 @@ def send_account_registration_submitted_email(
     """
     Karyawan -> Admin: Memberitahu HRD ada akun baru yang telah diverifikasi OTP dan menunggu persetujuan HRD.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/hr/account-approvals"
 
     body_html = f"""
@@ -856,7 +862,7 @@ def send_account_approval_decision_email(
     """
     Admin -> Karyawan: Memberitahu Karyawan bahwa akun mereka telah Disetujui (Approved) atau Ditolak (Rejected).
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     login_url = f"{base}/login"
 
     is_approved = status.lower() == "approved"
@@ -963,7 +969,7 @@ def send_expand_claim_submitted_email(
     """
     Karyawan -> Admin: Memberitahu Admin/Finance ada pengajuan klaim expand / perjalanan dinas baru.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/hr/business-trip-acc"
 
     formatted_amount = f"Rp {amount:,.0f}".replace(",", ".")
@@ -1049,7 +1055,7 @@ def send_expand_claim_status_email(
     """
     Admin -> Karyawan: Memberitahu Karyawan bahwa klaim expand telah Disetujui / Ditolak oleh Admin/Finance.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/employee/business-trip"
 
     is_approved = status.upper() == "APPROVED"
@@ -1134,7 +1140,7 @@ def send_account_registration_submitted_email(
     """
     Karyawan -> Admin: Memberitahu HRD ada akun baru yang telah diverifikasi OTP dan menunggu persetujuan HRD.
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     action_url = f"{base}/hr/account-approvals"
 
     body_html = f"""
@@ -1203,7 +1209,7 @@ def send_account_approval_decision_email(
     """
     Admin -> Karyawan: Memberitahu Karyawan bahwa akun mereka telah Disetujui (Approved) atau Ditolak (Rejected).
     """
-    base = (custom_base_url or APP_BASE_URL).rstrip("/")
+    base = get_web_base_url(custom_base_url)
     login_url = f"{base}/login"
 
     is_approved = status.lower() == "approved"
