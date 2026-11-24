@@ -257,7 +257,15 @@ def find_task_participant_emails(task_id: str, root_task_id: Optional[str] = Non
             doc = db.collection("tasks").document(tid).get()
             if doc.exists:
                 data = doc.to_dict() or {}
-                for key in ["assignedToEmail", "userEmail", "createdByEmail", "assignedByEmail", "sourceLeaderEmail", "leaderEmail"]:
+                for key in [
+                    "assignedToEmail",
+                    "userEmail",
+                    "createdByEmail",
+                    "assignedByEmail",
+                    "sourceLeaderEmail",
+                    "leaderEmail",
+                    "departmentLeadEmail",
+                ]:
                     val = data.get(key)
                     if val and isinstance(val, str) and "@" in val:
                         clean = val.strip().lower()
@@ -269,18 +277,33 @@ def find_task_participant_emails(task_id: str, root_task_id: Optional[str] = Non
     # Ambil juga email dari sub-task turunan jika root_task_id ada
     effective_root = root_task_id or task_id
     if effective_root:
-        try:
-            subtasks = db.collection("tasks").where(filter=FieldFilter("rootTaskId", "==", effective_root)).stream()
-            for s_doc in subtasks:
-                s_data = s_doc.to_dict() or {}
-                for key in ["assignedToEmail", "userEmail", "createdByEmail", "assignedByEmail"]:
-                    val = s_data.get(key)
-                    if val and isinstance(val, str) and "@" in val:
-                        clean = val.strip().lower()
-                        if clean != clean_exclude and clean not in emails:
-                            emails.append(clean)
-        except Exception as e:
-            logger.warning(f"Gagal mengambil subtask participants {effective_root}: {e}")
+        seen_subtask_ids: set[str] = set()
+        for field in ("rootTaskId", "parentTaskId"):
+            try:
+                subtasks = db.collection("tasks").where(
+                    filter=FieldFilter(field, "==", effective_root)
+                ).stream()
+                for s_doc in subtasks:
+                    if s_doc.id in seen_subtask_ids:
+                        continue
+                    seen_subtask_ids.add(s_doc.id)
+                    s_data = s_doc.to_dict() or {}
+                    for key in [
+                        "assignedToEmail",
+                        "userEmail",
+                        "createdByEmail",
+                        "assignedByEmail",
+                        "departmentLeadEmail",
+                    ]:
+                        val = s_data.get(key)
+                        if val and isinstance(val, str) and "@" in val:
+                            clean = val.strip().lower()
+                            if clean != clean_exclude and clean not in emails:
+                                emails.append(clean)
+            except Exception as e:
+                logger.warning(
+                    f"Gagal mengambil subtask participants {effective_root} via {field}: {e}"
+                )
 
     return emails
 

@@ -63,12 +63,9 @@ all_routers = [
 ]
 
 for router in all_routers:
-    # Mount dengan prefix asli: /api/xxx
     app.include_router(router)
-    # Mount dengan prefix ganda: /api/api/xxx
-    # Ini menangani kasus frontend yang mengirim BASE_API_URL=/api/ + /api/xxx
     app.include_router(router, prefix="/api")
-
+    
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=12046, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=12045, reload=True)

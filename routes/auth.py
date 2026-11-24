@@ -9,6 +9,7 @@ import firebase_admin
 from pydantic import BaseModel, EmailStr
 from firebase_admin import auth, firestore
 from typing import Optional
+import requests
 
 from dotenv import load_dotenv
 
@@ -46,6 +47,61 @@ class ResetPasswordRequest(BaseModel):
     email: EmailStr
     otp: str
     newPassword: str
+
+
+class VerifyLoginRecaptchaRequest(BaseModel):
+    token: str
+
+
+def verify_recaptcha_v3(token: str, expected_action: str) -> None:
+    secret_key = os.getenv("RECAPTCHA_V3_SECRET_KEY", "").strip()
+    if not secret_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Secret key reCAPTCHA belum diatur pada backend/.env.",
+        )
+    if not token.strip():
+        raise HTTPException(status_code=400, detail="Token reCAPTCHA wajib dikirim.")
+
+    try:
+        response = requests.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data={"secret": secret_key, "response": token},
+            timeout=5,
+        )
+        response.raise_for_status()
+        verification = response.json()
+    except (requests.RequestException, ValueError) as error:
+        logger.exception("Google reCAPTCHA verification request failed.")
+        raise HTTPException(
+            status_code=502,
+            detail="Layanan Google reCAPTCHA tidak dapat diverifikasi. Silakan coba lagi.",
+        ) from error
+
+    if not isinstance(verification, dict) or verification.get("success") is not True:
+        errors = verification.get("error-codes", []) if isinstance(verification, dict) else []
+        logger.warning(f"Google reCAPTCHA verification rejected: {errors}")
+        raise HTTPException(status_code=403, detail="Verifikasi reCAPTCHA gagal.")
+
+    action = verification.get("action")
+    if action and action != expected_action:
+        logger.warning(f"Google reCAPTCHA action mismatch: expected '{expected_action}', got '{action}'")
+        raise HTTPException(status_code=403, detail="Action reCAPTCHA tidak sesuai.")
+
+    if "score" in verification:
+        try:
+            score = float(verification.get("score", 0))
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=403, detail="Skor reCAPTCHA tidak valid.") from error
+        if score < 0.5:
+            logger.warning(f"Google reCAPTCHA score too low: {score}")
+            raise HTTPException(status_code=403, detail="Skor reCAPTCHA terlalu rendah. Silakan coba lagi.")
+
+
+@router.post("/verify-login-recaptcha")
+def verify_login_recaptcha(req: VerifyLoginRecaptchaRequest):
+    verify_recaptcha_v3(req.token, "login")
+    return {"status": "success"}
 
 
 # ==========================================

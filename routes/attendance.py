@@ -73,12 +73,14 @@ def get_attendance_history(uid: str = Depends(get_current_uid)):
 
     return {"status": "success", "data": history}
 
+
 class AttendanceRequest(BaseModel):
     uid: str
     email: EmailStr
     latitude: float
     longitude: float
     photoBase64: Optional[str] = ""
+
 
 class CheckInRequest(BaseModel):
     uid: str
