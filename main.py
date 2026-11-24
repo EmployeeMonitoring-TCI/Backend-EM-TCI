@@ -68,4 +68,4 @@ for router in all_routers:
     
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=12045, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=12046, reload=True)

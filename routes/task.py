@@ -66,11 +66,18 @@ class LeaderTaskAssignmentRequest(BaseModel):
     assignedToId: Optional[str] = ""
     assignedToName: Optional[str] = ""
     assignedToEmail: Optional[str] = ""
+    assignedEmployeeIds: Optional[list[str]] = None
     userName: Optional[str] = ""
     userEmail: Optional[str] = ""
     priority: Optional[Literal["LOW", "MEDIUM", "HIGH"]] = "MEDIUM"
     startDate: Optional[str] = ""
     deadline: Optional[str] = ""
+    relatedTaskId: Optional[str] = ""
+    relatedTaskTitle: Optional[str] = ""
+    # Legacy clients used hierarchy fields for a task relation.
+    parentTaskId: Optional[str] = ""
+    parentTaskTitle: Optional[str] = ""
+    rootTaskId: Optional[str] = ""
 
 
 def collect_task_tree(db: Any, initial_tasks: list[Any]) -> list[Any]:
@@ -131,44 +138,70 @@ def create_leader_assignment(
     assigned_to_id = (req.assignedToId or "").strip()
     assigned_to_email = (req.assignedToEmail or "").strip().lower()
     employee = None
+    employees = []
     department_lead = None
     if req.assignmentType == "employee":
-        if not assigned_to_id or not assigned_to_email:
+        employee_ids = list(dict.fromkeys(
+            employee_id.strip()
+            for employee_id in (req.assignedEmployeeIds or [assigned_to_id])
+            if employee_id and employee_id.strip()
+        ))
+        if not employee_ids:
             raise HTTPException(status_code=400, detail="Penerima employee belum lengkap.")
-        employee_snapshot = db.collection("users").document(assigned_to_id).get()
-        employee = employee_snapshot.to_dict() if employee_snapshot.exists else None
-        employee_role = str((employee or {}).get("role") or "").strip().lower().replace("_", "-")
-        employee_email = str((employee or {}).get("email") or "").strip().lower()
-        if employee_role not in {"employee", "karyawan", "staff"} or employee_email != assigned_to_email:
-            raise HTTPException(status_code=400, detail="Penerima harus merupakan employee terdaftar dengan email yang sesuai.")
-        employee_department_id = str(
-            (employee or {}).get("departmentId")
-            or (employee or {}).get("department")
-            or (employee or {}).get("departmentName")
-            or ""
-        ).strip()
-        if department_id and department_id != employee_department_id:
-            raise HTTPException(status_code=400, detail="Department assignment tidak sesuai dengan data employee.")
-        department_id = employee_department_id
+        if assigned_to_id and assigned_to_id != employee_ids[0]:
+            raise HTTPException(status_code=400, detail="Penerima utama harus menjadi employee pertama dalam daftar.")
+        assigned_to_id = employee_ids[0]
+        for employee_id in employee_ids:
+            employee_snapshot = db.collection("users").document(employee_id).get()
+            assigned_employee = employee_snapshot.to_dict() if employee_snapshot.exists else None
+            employee_role = str((assigned_employee or {}).get("role") or "").strip().lower().replace("_", "-")
+            employee_email = str((assigned_employee or {}).get("email") or "").strip().lower()
+            if employee_role not in {"employee", "karyawan", "staff"} or not employee_email:
+                raise HTTPException(status_code=400, detail="Semua penerima harus merupakan employee terdaftar dengan email.")
+            if employee_id == assigned_to_id and assigned_to_email and employee_email != assigned_to_email:
+                raise HTTPException(status_code=400, detail="Email penerima utama tidak sesuai dengan data employee.")
+            employee_department_id = str(
+                (assigned_employee or {}).get("departmentId")
+                or (assigned_employee or {}).get("department")
+                or (assigned_employee or {}).get("departmentName")
+                or ""
+            ).strip()
+            if employee_id == assigned_to_id:
+                if department_id and department_id != employee_department_id:
+                    raise HTTPException(status_code=400, detail="Department assignment tidak sesuai dengan data employee.")
+                department_id = employee_department_id
+            employees.append({
+                "id": employee_id,
+                "fullName": str((assigned_employee or {}).get("fullName") or (assigned_employee or {}).get("name") or employee_email).strip(),
+                "email": employee_email,
+                "departmentId": employee_department_id,
+                "departmentName": str(
+                    (assigned_employee or {}).get("departmentName")
+                    or (assigned_employee or {}).get("department")
+                    or employee_department_id
+                ).strip(),
+            })
+        employee = db.collection("users").document(assigned_to_id).get().to_dict() or {}
+        assigned_to_email = str(employee.get("email") or "").strip().lower()
     else:
         department_lead_id = (req.departmentLeadId or "").strip()
         if not department_lead_id:
-            raise HTTPException(status_code=400, detail="Lead Department tujuan wajib dipilih.")
+            raise HTTPException(status_code=400, detail="Penerima Lead Department atau Leader wajib dipilih.")
         lead_snapshot = db.collection("users").document(department_lead_id).get()
         department_lead = lead_snapshot.to_dict() if lead_snapshot.exists else None
         lead_role = str((department_lead or {}).get("role") or "").strip().lower().replace("_", "-")
-        if lead_role not in {"lead", "lead-department"}:
-            raise HTTPException(status_code=400, detail="Department tujuan tidak memiliki Lead yang valid.")
+        if lead_role not in {"leader", "lead", "lead-department"}:
+            raise HTTPException(status_code=400, detail="Penerima harus merupakan akun Leader atau Lead Department terdaftar.")
         lead_department_id = str(
             (department_lead or {}).get("departmentId")
             or (department_lead or {}).get("department")
             or (department_lead or {}).get("departmentName")
             or ""
         ).strip()
-        if department_id and department_id != lead_department_id:
+        if department_id and lead_department_id and department_id != lead_department_id:
             raise HTTPException(status_code=400, detail="Department tujuan tidak sesuai dengan Lead yang dipilih.")
-        department_id = lead_department_id
-        if not department_id:
+        department_id = lead_department_id or department_id
+        if lead_role != "leader" and not department_id:
             raise HTTPException(status_code=400, detail="Department tujuan wajib dipilih.")
 
     if identity["role"] == "lead-department":
@@ -177,6 +210,10 @@ def create_leader_assignment(
             raise HTTPException(status_code=403, detail="Task hanya dapat dibuat untuk department Anda.")
         if req.assignmentType == "employee" and not department_id:
             raise HTTPException(status_code=403, detail="Employee tujuan belum terdaftar di department Anda.")
+        if req.assignmentType == "employee" and any(
+            assigned_employee["departmentId"] != own_department for assigned_employee in employees
+        ):
+            raise HTTPException(status_code=403, detail="Semua employee tujuan harus berasal dari department Anda.")
 
     project = project_snapshot.to_dict() or {}
     task_ref = db.collection("tasks").document()
@@ -222,9 +259,21 @@ def create_leader_assignment(
             "assignedToEmail": assigned_to_email,
             "userName": str((employee or {}).get("fullName") or (employee or {}).get("name") or req.userName or req.assignedToName or "").strip(),
             "userEmail": assigned_to_email,
+            "assignedEmployees": employees,
         })
     else:
         task_data["departmentLeadEmail"] = str((department_lead or {}).get("email") or "").strip().lower()
+
+    related_task_id = (req.relatedTaskId or req.parentTaskId or "").strip()
+    if related_task_id:
+        related_snapshot = db.collection("tasks").document(related_task_id).get()
+        if not related_snapshot.exists or (related_snapshot.to_dict() or {}).get("isArchived"):
+            raise HTTPException(status_code=404, detail="Task yang direlasikan tidak ditemukan atau sudah diarsipkan.")
+        related_task = related_snapshot.to_dict() or {}
+        task_data["relatedTaskId"] = related_task_id
+        task_data["relatedTaskTitle"] = str(
+            related_task.get("title") or req.relatedTaskTitle or req.parentTaskTitle or ""
+        ).strip()
 
     task_ref.set(task_data)
     return {"status": "success", "taskId": task_ref.id}
