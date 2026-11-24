@@ -214,6 +214,8 @@ def create_leader_assignment(
             assigned_employee["departmentId"] != own_department for assigned_employee in employees
         ):
             raise HTTPException(status_code=403, detail="Semua employee tujuan harus berasal dari department Anda.")
+    if len(employees) > 500:
+        raise HTTPException(status_code=400, detail="Maksimal 500 employee dapat menerima satu task.")
 
     project = project_snapshot.to_dict() or {}
     task_ref = db.collection("tasks").document()
@@ -259,7 +261,8 @@ def create_leader_assignment(
             "assignedToEmail": assigned_to_email,
             "userName": str((employee or {}).get("fullName") or (employee or {}).get("name") or req.userName or req.assignedToName or "").strip(),
             "userEmail": assigned_to_email,
-            "assignedEmployees": employees,
+            "assignedEmployees": employees[:1],
+            "rootTaskId": task_ref.id,
         })
     else:
         task_data["departmentLeadEmail"] = str((department_lead or {}).get("email") or "").strip().lower()
@@ -274,6 +277,45 @@ def create_leader_assignment(
         task_data["relatedTaskTitle"] = str(
             related_task.get("title") or req.relatedTaskTitle or req.parentTaskTitle or ""
         ).strip()
+
+    employee_task_ids = []
+    if req.assignmentType == "employee":
+        employee_task_ids.append({"employeeId": employees[0]["id"], "taskId": task_ref.id})
+        if len(employees) > 1:
+            batch = db.batch()
+            batch.set(task_ref, task_data)
+            for assigned_employee in employees[1:]:
+                employee_task_ref = db.collection("tasks").document()
+                employee_task_data = dict(task_data)
+                employee_task_data.pop("assignmentType", None)
+                employee_task_data.update({
+                    "assignedToId": assigned_employee["id"],
+                    "userId": assigned_employee["id"],
+                    "assignedToName": assigned_employee["fullName"],
+                    "assignedToEmail": assigned_employee["email"],
+                    "userName": assigned_employee["fullName"],
+                    "userEmail": assigned_employee["email"],
+                    "assignedEmployees": [assigned_employee],
+                    "departmentId": assigned_employee["departmentId"],
+                    "departmentName": assigned_employee["departmentName"],
+                    "parentTaskId": task_ref.id,
+                    "parentTaskTitle": task_data["title"],
+                    "rootTaskId": task_ref.id,
+                    "sourceTaskId": task_ref.id,
+                })
+                batch.set(employee_task_ref, employee_task_data)
+                employee_task_ids.append({
+                    "employeeId": assigned_employee["id"],
+                    "taskId": employee_task_ref.id,
+                })
+            batch.commit()
+        else:
+            task_ref.set(task_data)
+        return {
+            "status": "success",
+            "taskId": task_ref.id,
+            "employeeTaskIds": employee_task_ids,
+        }
 
     task_ref.set(task_data)
     return {"status": "success", "taskId": task_ref.id}
