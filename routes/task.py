@@ -214,8 +214,8 @@ def create_leader_assignment(
             assigned_employee["departmentId"] != own_department for assigned_employee in employees
         ):
             raise HTTPException(status_code=403, detail="Semua employee tujuan harus berasal dari department Anda.")
-    if len(employees) > 500:
-        raise HTTPException(status_code=400, detail="Maksimal 500 employee dapat menerima satu task.")
+    if len(employees) > 5:
+        raise HTTPException(status_code=400, detail="Maksimal 5 employee dapat menerima satu task.")
 
     project = project_snapshot.to_dict() or {}
     task_ref = db.collection("tasks").document()
@@ -261,7 +261,8 @@ def create_leader_assignment(
             "assignedToEmail": assigned_to_email,
             "userName": str((employee or {}).get("fullName") or (employee or {}).get("name") or req.userName or req.assignedToName or "").strip(),
             "userEmail": assigned_to_email,
-            "assignedEmployees": employees[:1],
+            "assignedEmployees": employees,
+            "assignedEmployeeIds": [assigned_employee["id"] for assigned_employee in employees],
             "rootTaskId": task_ref.id,
         })
     else:
@@ -280,8 +281,25 @@ def create_leader_assignment(
 
     employee_task_ids = []
     if req.assignmentType == "employee":
+        is_shared_task = len(employees) > 1
+        shared_assignees = [
+            {
+                "id": assigned_employee["id"],
+                "fullName": assigned_employee["fullName"],
+                "email": assigned_employee["email"],
+            }
+            for assigned_employee in employees
+        ]
+        shared_assignee_ids = [assigned_employee["id"] for assigned_employee in employees]
+        if is_shared_task:
+            task_data.update({
+                "isSharedTask": True,
+                "sharedTaskGroupId": task_ref.id,
+                "sharedAssignees": shared_assignees,
+                "sharedAssigneeIds": shared_assignee_ids,
+            })
         employee_task_ids.append({"employeeId": employees[0]["id"], "taskId": task_ref.id})
-        if len(employees) > 1:
+        if is_shared_task:
             batch = db.batch()
             batch.set(task_ref, task_data)
             for assigned_employee in employees[1:]:
@@ -302,6 +320,10 @@ def create_leader_assignment(
                     "parentTaskTitle": task_data["title"],
                     "rootTaskId": task_ref.id,
                     "sourceTaskId": task_ref.id,
+                    "isSharedTask": True,
+                    "sharedTaskGroupId": task_ref.id,
+                    "sharedAssignees": shared_assignees,
+                    "sharedAssigneeIds": shared_assignee_ids,
                 })
                 batch.set(employee_task_ref, employee_task_data)
                 employee_task_ids.append({
